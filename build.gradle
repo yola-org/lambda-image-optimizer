@@ -1,0 +1,47 @@
+
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // AWS Lambda
+    implementation 'com.amazonaws:aws-lambda-java-core:1.2.2'
+    implementation 'com.amazonaws:aws-lambda-java-events:3.11.1'
+
+    // AWS Durable Execution SDK
+    implementation 'software.amazon.lambda.durable:aws-durable-execution-sdk-java:1.0.1'
+
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Disable the standard JAR
+tasks.named('jar') {
+    enabled = false
+}
+
+// Generate a fat JAR with all dependencies
+tasks.named('shadowJar') {
+    archiveClassifier.set('all')
+    mergeServiceFiles()
+}
+
+// Build generates the fat JAR
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}

@@ -1,17 +1,219 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
-# Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
-# Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ci/variables/#cicd-variable-precedence
-stages:
-- test
-- secret-detection
-sast:
-  stage: test
+
+# ============================================================
+# GitLab CI/CD - Java SQS Lambda
+# Test -> Build -> Docker Build -> ECR Push -> Git Tag
+# ============================================================
+
 include:
-- template: Security/SAST.gitlab-ci.yml
-- template: Security/Secret-Detection.gitlab-ci.yml
-secret_detection:
-  stage: secret-detection
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+stages:
+  - test
+  - secret-detection
+  - build
+  - release
+
+variables:
+  GIT_DEPTH: "0"
+
+  # Docker configuration
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_HOST: "tcp://docker:2376"
+  DOCKER_TLS_VERIFY: "1"
+  DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+
+  # Docker image repository
+  DOCKER_IMAGE_NAME: "vestio/image-optimizer"
+
+
+# ============================================================
+# 1. TEST
+# ============================================================
+
+test:
+  stage: test
+  image: gradle:8.10-jdk17
+  script:
+    - chmod +x gradlew
+    - ./gradlew clean test
+
+
+# ============================================================
+# 2. BUILD
+# ============================================================
+
+build:
+  stage: build
+  image: gradle:8.10-jdk17
+  script:
+    - chmod +x gradlew
+    - ./gradlew clean build
+  artifacts:
+    paths:
+      - build/libs/
+    expire_in: 1 day
+
+
+# ============================================================
+# 3. RELEASE AND PUSH
+# Runs ONLY on the default branch
+# ============================================================
+
+release-and-push:
+  stage: release
+
+  image: docker:27.5.1-cli
+
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+      variables:
+        DOCKER_TLS_CERTDIR: "/certs"
+
+  needs:
+    - job: build
+      artifacts: true
+
+  resource_group: lambda-release-main
+
+  before_script:
+    - apk add --no-cache aws-cli git
+
+  script:
+    - |
+      set -eu
+
+      # ------------------------------------------------------
+      # 1. Validate required variables
+      # ------------------------------------------------------
+
+      : "${AWS_REGION:?AWS_REGION is required}"
+      : "${DOCKER_REGISTRY:?DOCKER_REGISTRY is required}"
+      : "${DOCKER_IMAGE_NAME:?DOCKER_IMAGE_NAME is required}"
+
+      export AWS_DEFAULT_REGION="$AWS_REGION"
+
+      # ------------------------------------------------------
+      # 2. AWS Authentication
+      # ------------------------------------------------------
+
+      echo "Checking AWS identity..."
+      aws sts get-caller-identity
+
+      # ------------------------------------------------------
+      # 3. Calculate next version
+      # ------------------------------------------------------
+
+      echo "Fetching Git tags..."
+      git fetch --force --tags origin
+
+      LATEST_TAG=$(
+        git tag --sort=-version:refname |
+        grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+        head -n 1 || true
+      )
+
+      if [ -z "$LATEST_TAG" ]; then
+        VERSION="1.0.0"
+      else
+        CURRENT_VERSION="${LATEST_TAG#v}"
+
+        MAJOR=$(echo "$CURRENT_VERSION" | cut -d. -f1)
+        MINOR=$(echo "$CURRENT_VERSION" | cut -d. -f2)
+
+        # Breaking change: commit title starts with !
+        case "$CI_COMMIT_TITLE" in
+          \!*)
+            VERSION="$((MAJOR + 1)).0.0"
+            ;;
+          *)
+            VERSION="${MAJOR}.$((MINOR + 1)).0"
+            ;;
+        esac
+      fi
+
+      GIT_TAG="v${VERSION}"
+
+      echo "============================================"
+      echo "Commit: ${CI_COMMIT_TITLE}"
+      echo "Previous tag: ${LATEST_TAG:-none}"
+      echo "New version: ${VERSION}"
+      echo "Git tag: ${GIT_TAG}"
+      echo "============================================"
+
+      # ------------------------------------------------------
+      # 4. Ensure the Git tag does not already exist
+      # ------------------------------------------------------
+
+      if git ls-remote --exit-code --tags origin "refs/tags/${GIT_TAG}" >/dev/null 2>&1; then
+        echo "ERROR: Git tag ${GIT_TAG} already exists."
+        exit 1
+      fi
+
+      # ------------------------------------------------------
+      # 5. Docker Login to AWS ECR
+      # ------------------------------------------------------
+
+      IMAGE_URI="${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}"
+
+      echo "Logging in to AWS ECR..."
+
+      aws ecr get-login-password --region "$AWS_REGION" |
+        docker login \
+          --username AWS \
+          --password-stdin "$DOCKER_REGISTRY"
+
+      # ------------------------------------------------------
+      # 6. Build Docker Image
+      # ------------------------------------------------------
+
+      echo "Building Docker image ${IMAGE_URI}:${VERSION}"
+
+      docker build \
+        --file Dockerfile \
+        --build-arg APP_VERSION="$VERSION" \
+        --tag "${IMAGE_URI}:${VERSION}" \
+        --tag "${IMAGE_URI}:latest" \
+        .
+
+      # ------------------------------------------------------
+      # 7. Push Docker Images
+      # ------------------------------------------------------
+
+      echo "Pushing versioned image..."
+      docker push "${IMAGE_URI}:${VERSION}"
+
+      echo "Pushing latest image..."
+      docker push "${IMAGE_URI}:latest"
+
+      # ------------------------------------------------------
+      # 8. Create and Push Git Tag
+      # ------------------------------------------------------
+
+      echo "Creating Git tag ${GIT_TAG}..."
+
+      git config user.name "GitLab CI Bot"
+      git config user.email "ci-bot@example.com"
+
+      git tag -a "$GIT_TAG" -m "Release ${VERSION}"
+
+      git push \
+        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
+        "$GIT_TAG"
+
+      # ------------------------------------------------------
+      # 9. Release Summary
+      # ------------------------------------------------------
+
+      echo "============================================"
+      echo "RELEASE COMPLETED SUCCESSFULLY"
+      echo "============================================"
+      echo "Version: ${VERSION}"
+      echo "Git tag: ${GIT_TAG}"
+      echo "Docker image: ${IMAGE_URI}:${VERSION}"
+      echo "Docker image: ${IMAGE_URI}:latest"
+      echo "============================================"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
