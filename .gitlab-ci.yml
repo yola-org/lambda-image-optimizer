@@ -121,7 +121,7 @@ build:
   artifacts:
     paths:
       - build/libs/
-      - Dockerfile
+      - docker/Dockerfile
     expire_in: 1 day
 
 
@@ -170,7 +170,7 @@ docker-build-push:
 
       echo "Building Docker image ${IMAGE_URI}:${VERSION}"
       docker build \
-        --file Dockerfile \
+        --file docker/Dockerfile \
         --build-arg APP_VERSION="$VERSION" \
         --tag "${IMAGE_URI}:${VERSION}" \
         --tag "${IMAGE_URI}:latest" \
