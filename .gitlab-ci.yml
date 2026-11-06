@@ -214,7 +214,7 @@ git-tag:
       git tag -a "$GIT_TAG" -m "Release ${VERSION}"
 
       git push \
-        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
+        "https://gitlab-ci-token:${ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" \
         "$GIT_TAG"
 
       echo "============================================"
@@ -222,6 +222,93 @@ git-tag:
       echo "============================================"
       echo "Version: ${VERSION}"
       echo "Git tag: ${GIT_TAG}"
+      echo "============================================"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# ============================================================
+# 5. RELEASE: AUTOMATE AWS-INFRA DEV BRANCH & MR CREATION
+# ============================================================
+
+update-aws-infra:
+  stage: release
+  image: alpine:latest
+
+  needs:
+    - job: calculate-version
+      artifacts: true
+    - job: git-tag
+
+  before_script:
+    - apk add --no-cache git curl jq
+
+  script:
+    - |
+      set -eu
+
+      # Target repository configuration
+      INFRA_PROJECT_PATH="aws-infra"  # Change to "group-name/aws-infra" if it's in a subgroup or different path under the same group
+      INFRA_REPO_URL="https://oauth2:${ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_NAMESPACE}/${INFRA_PROJECT_PATH}.git"
+      BRANCH_NAME="update-image-optimizer-dev-${VERSION}"
+      TARGET_FILE="envs/dev/terraform.tfvars"
+      
+      # The terraform variable key you want to update (e.g., "image_version" or "tag")
+      TF_VAR_KEY="image_optimizer_image_tag" 
+
+      echo "Cloning aws-infra repository..."
+      git clone "$INFRA_REPO_URL" infra-repo
+      cd infra-repo
+
+      git config user.name "GitLab CI Bot"
+      git config user.email "ci-bot@example.com"
+
+      echo "Creating new branch ${BRANCH_NAME} from dev..."
+      git checkout -b "$BRANCH_NAME" origin/dev
+
+      echo "Updating ${TARGET_FILE}..."
+      # Check if file exists, then update the variable key using sed or awk
+      if [ -f "$TARGET_FILE" ]; then
+        # This updates a line like: image_version = "1.0.0" -> image_version = "1.1.0"
+        sed -i 's/\('"${TF_VAR_KEY}"'\s*=\s*"\)[^"]*\("\)/\1'"${VERSION}"'\2/g' "$TARGET_FILE"
+      else
+        echo "ERROR: ${TARGET_FILE} not found in aws-infra repository!"
+        exit 1
+      fi
+
+      git add "$TARGET_FILE"
+      git commit -m "chore(dev): update image-optimizer version to ${VERSION}"
+
+      echo "Pushing new branch to remote..."
+      git push origin "$BRANCH_NAME"
+
+      echo "Opening Merge Request via GitLab API..."
+      # Create Merge Request from BRANCH_NAME to dev
+      API_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ROOT_NAMESPACE}%2F${INFRA_PROJECT_PATH}/merge_requests"
+      
+      PAYLOAD=$(jq -n \
+        --arg source "$BRANCH_NAME" \
+        --arg target "dev" \
+        --arg title "chore(dev): update image-optimizer to v${VERSION}" \
+        --arg desc "Automated version bump for image-optimizer to v${VERSION}" \
+        '{source_branch: $source, target_branch: $target, title: $title, description: $desc}')
+
+      RESPONSE=$(curl --silent --request POST "$API_URL" \
+        --header "PRIVATE-TOKEN: ${ACCESS_TOKEN}" \
+        --header "Content-Type: application/json" \
+        --data "$PAYLOAD")
+
+      MR_URL=$(echo "$RESPONSE" | jq -r '.web_url // empty')
+      if [ -n "$MR_URL" ]; then
+        echo "Successfully created Merge Request: $MR_URL"
+      else
+        echo "Failed to create Merge Request response:"
+        echo "$RESPONSE"
+        exit 1
+      fi
+
+      echo "============================================"
+      echo "AWS-INFRA UPDATE COMPLETED SUCCESSFULLY"
       echo "============================================"
 
   rules:
