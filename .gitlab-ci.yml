@@ -121,6 +121,7 @@ build:
   artifacts:
     paths:
       - build/libs/
+      - Dockerfile
     expire_in: 1 day
 
 
