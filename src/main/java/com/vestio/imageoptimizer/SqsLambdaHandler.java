@@ -9,6 +9,12 @@ public class SqsLambdaHandler implements RequestHandler<SQSEvent, Void> {
     @Override
     public Void handleRequest(SQSEvent event, Context context) {
 
+        context.getLogger().log("Received event: " + event);
+        context.getLogger().log("Received context: " + context);
+        context.getLogger().log("Received environment variables: " + System.getenv());
+        context.getLogger().log("Received system properties: " + System.getProperties());
+        context.getLogger().log("Received command line arguments: " + System.getenv("AWS_LAMBDA_FUNCTION_NAME"));
+
         if (event == null || event.getRecords() == null) {
             return null;
         }
