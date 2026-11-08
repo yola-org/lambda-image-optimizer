@@ -2,38 +2,57 @@ package com.vestio.imageoptimizer;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
+import com.amazonaws.services.lambda.runtime.events.SQSBatchResponse;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import software.amazon.awssdk.services.s3.S3Client;
 
-public class SqsLambdaHandler implements RequestHandler<SQSEvent, Void> {
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/** SQS handler. Configure the event source mapping with ReportBatchItemFailures. */
+public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatchResponse> {
+    private static final Logger LOGGER = Logger.getLogger(SqsLambdaHandler.class.getName());
+    private final ObjectMapper objectMapper;
+    private final ImageOptimizer imageOptimizer;
+
+    public SqsLambdaHandler() {
+        this(new ObjectMapper(), new ImageOptimizer(S3Client.create(), ImageSettings.fromEnvironment()));
+    }
+
+    SqsLambdaHandler(ObjectMapper objectMapper, ImageOptimizer imageOptimizer) {
+        this.objectMapper = objectMapper;
+        this.imageOptimizer = imageOptimizer;
+    }
 
     @Override
-    public Void handleRequest(SQSEvent event, Context context) {
-
-        context.getLogger().log("Received event: " + event);
-        context.getLogger().log("Received context: " + context);
-        context.getLogger().log("Received environment variables: " + System.getenv());
-        context.getLogger().log("Received system properties: " + System.getProperties());
-        context.getLogger().log("Received command line arguments: " + System.getenv("AWS_LAMBDA_FUNCTION_NAME"));
-
+    public SQSBatchResponse handleRequest(SQSEvent event, Context context) {
         if (event == null || event.getRecords() == null) {
-            return null;
+            LOGGER.warning("Received an SQS event without records");
+            return new SQSBatchResponse(List.of());
         }
 
-        context.getLogger().log(
-                "Received " + event.getRecords().size() + " SQS messages"
-        );
-
+        List<SQSBatchResponse.BatchItemFailure> failures = new ArrayList<>();
         for (SQSEvent.SQSMessage message : event.getRecords()) {
-
             String messageId = message.getMessageId();
-            String body = message.getBody();
-
-            context.getLogger().log("Message ID: " + messageId);
-            context.getLogger().log("Message body: " + body);
-
-            // TODO: Process message
+            String listingId = "unknown";
+            try {
+                OptimizationRequest request = objectMapper.readValue(message.getBody(), OptimizationRequest.class);
+                listingId = request.listingId();
+                imageOptimizer.optimize(request);
+                LOGGER.info("Optimized listing " + listingId + " from SQS message " + messageId);
+            } catch (Exception exception) {
+                // Log the full stack trace once at the message boundary; the message is retried via ReportBatchItemFailures.
+                LOGGER.log(Level.SEVERE, "Image optimization failed for listing " + listingId
+                        + " (SQS message " + messageId + ")", exception);
+                failures.add(new SQSBatchResponse.BatchItemFailure(messageId));
+            }
         }
-
-        return null;
+        if (!failures.isEmpty()) {
+            LOGGER.warning(failures.size() + " of " + event.getRecords().size() + " SQS message(s) failed");
+        }
+        return new SQSBatchResponse(failures);
     }
 }

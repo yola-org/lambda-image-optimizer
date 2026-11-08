@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/java:17
+FROM public.ecr.aws/lambda/java:25
 
 # ------------------------------------------------------------
 # Application version (provided by GitLab CI)
@@ -6,6 +6,7 @@ FROM public.ecr.aws/lambda/java:17
 
 ARG APP_VERSION=unknown
 ENV APP_VERSION=${APP_VERSION}
+ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED"
 
 # ------------------------------------------------------------
 # Copy the Gradle Shadow JAR

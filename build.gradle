@@ -6,7 +6,7 @@ plugins {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
@@ -19,15 +19,22 @@ dependencies {
     implementation 'com.amazonaws:aws-lambda-java-core:1.2.2'
     implementation 'com.amazonaws:aws-lambda-java-events:3.11.1'
 
-    // AWS Durable Execution SDK
-    implementation 'software.amazon.lambda.durable:aws-durable-execution-sdk-java:1.0.1'
+    // AWS SDK v2
+    implementation platform('software.amazon.awssdk:bom:2.31.22')
+    implementation 'software.amazon.awssdk:s3'
+
+    // Message parsing and WebP ImageIO writer (includes Linux native binaries)
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    implementation 'com.github.gotson:webp-imageio:0.2.2'
 
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
 }
 
 // Disable the standard JAR
