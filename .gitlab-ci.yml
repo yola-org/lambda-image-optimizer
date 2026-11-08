@@ -9,7 +9,6 @@ include:
       - templates/version.yml
       - templates/gradle.yml
       - templates/docker.yml
-      - templates/git-tag.yml
       - templates/infra-bump.yml
 
 stages:
@@ -34,14 +33,15 @@ workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-calculate-version:
-  extends: .version
-
 test:
   extends: .gradle-test
 
 build:
   extends: .gradle-build
+  needs:
+    - job: version:calculate
+      artifacts: true
+      optional: true
 
 docker-build-push:
   extends: [.docker-build-push-ecr, .default-branch-only]
@@ -49,19 +49,12 @@ docker-build-push:
     DOCKER_IMAGE_NAME: "vestio/image-optimizer"
 
 git-tag:
-  extends: [.git-tag, .default-branch-only]
-  needs:                          # strict: no "optional", docker must have succeeded
-    - job: calculate-version
-      artifacts: true
+  extends: [.version:tag, .default-branch-only]
+  needs:
     - job: docker-build-push
 
 update-aws-infra:
   extends: [.update-infra-image-tag, .default-branch-only]
-  needs:
-    - job: calculate-version
-      artifacts: true
-    - job: docker-build-push
-    - job: git-tag
   variables:
     INFRA_PROJECT_PATH: "aws-infra"
     INFRA_COMPONENT: "image-optimizer"
