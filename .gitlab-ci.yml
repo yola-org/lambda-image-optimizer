@@ -12,11 +12,14 @@ include:
       - templates/infra-bump.yml
 
 stages:
-  - prepare
   - test
   - secret-detection
   - build
   - release
+
+variables:
+  # Run Secret Detection in MR pipelines as well as branch pipelines.
+  AST_ENABLE_MR_PIPELINES: "true"
 
 # Branch + MR pipelines, no duplicates, no tags
 workflow:
@@ -28,10 +31,19 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH
 
-# Release jobs only run on the default branch (main), i.e. after a merge
+# Release jobs only run on the default branch (main), i.e. after a merge.
+# VERSION_SKIP=true disables every versioned release job consistently.
 .default-branch-only:
   rules:
+    - if: $VERSION_SKIP == "true"
+      when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# GitLab's Secret-Detection job defaults to the `test` stage. `needs: []`
+# lets it run immediately instead of waiting for the test stage.
+secret_detection:
+  stage: secret-detection
+  needs: []
 
 test:
   extends: .gradle-test
@@ -39,9 +51,12 @@ test:
 build:
   extends: .gradle-build
   needs:
+    # VERSION comes from this job's dotenv artifact; `test` makes sure a
+    # broken test suite never reaches the image build or the release jobs.
     - job: version:calculate
       artifacts: true
       optional: true
+    - job: test
 
 docker-build-push:
   extends: [.docker-build-push-ecr, .default-branch-only]
@@ -51,10 +66,19 @@ docker-build-push:
 git-tag:
   extends: [.version:tag, .default-branch-only]
   needs:
+    # VERSION / GIT_TAG come from this job's dotenv artifact. `needs` must list
+    # it directly: dotenv variables are not inherited transitively.
+    - job: version:calculate
+      artifacts: true
     - job: docker-build-push
 
 update-aws-infra:
   extends: [.update-infra-image-tag, .default-branch-only]
+  needs:
+    # Only bump the infra tag after the image has actually been pushed.
+    - job: version:calculate
+      artifacts: true
+    - job: docker-build-push
   variables:
     INFRA_PROJECT_PATH: "aws-infra"
     INFRA_COMPONENT: "image-optimizer"
