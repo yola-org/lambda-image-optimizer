@@ -52,3 +52,19 @@ docker build -t image-optimizer .
 ```
 
 The image uses `public.ecr.aws/lambda/java:25`, an Amazon Linux 2023 Lambda base image. Configure the Lambda with enough memory for its largest input image (start with 1,024 MB) and a timeout appropriate to the batch size (start with 60 seconds).
+
+## CI/CD Workflow
+
+GitHub Actions CI is configured in `.github/workflows/ci.yml` and executes in a strict linear sequence:
+
+```text
+version ──> changes ──> build-and-test ──> release-gate ──> docker ──> tag ──> infra-bump
+```
+
+- **Pull Request / Branch MR:** Runs `version` (using the MR title for bump detection, dry-run without creating tags), `changes`, and `build-and-test`. All subsequent release jobs are skipped. Duplicate runs are prevented via branch triggers (`branches: [main]`) and concurrency cancellation (`cancel-in-progress: true`).
+- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge. If application inputs changed:
+  1. `docker`: Builds and pushes the Docker container image to Amazon ECR.
+  2. `tag`: Creates and pushes the git release tag.
+  3. `infra-bump`: Opens a PR against `yola-org/aws-infra` to bump `image_optimizer_image_tag`.
+- **Direct pushes to `main`:** Blocked from triggering release actions by the release gate.
+
