@@ -26,6 +26,7 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
         }
 
         List<SQSBatchResponse.BatchItemFailure> failures = new ArrayList<>();
+        LOGGER.info("Processing " + event.getRecords().size() + " SQS record(s)");
         for (SQSEvent.SQSMessage message : event.getRecords()) {
             String messageId = message.getMessageId();
             String listingId = "unknown";

@@ -1,7 +1,11 @@
 # Image optimizer Lambda pipeline.
 #
 # Shared logic lives in yola-org/shared-workflows. Release jobs only run on
-# main, and only when application or Docker build inputs have changed.
+# main after a pull request is merged, and only when application or Docker
+# build inputs have changed.
+#
+# Execution sequence:
+#   version -> changes -> build-and-test -> release-gate -> docker -> tag -> infra-bump
 
 name: CI
 
@@ -9,50 +13,63 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write # push release tags
+  pull-requests: read # check merged PR for release gate
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  changes:
-    name: Detect application changes
-    uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
-    with:
-      patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
-
-  test-and-build:
-    name: Test and package
-    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
-    with:
-      artifact-name: lambda-jar
-      artifact-path: build/libs/
-
   version:
     name: Calculate version
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     permissions:
       contents: write
     uses: yola-org/shared-workflows/.github/workflows/reusable-version.yml@main
     with:
       tag: false
-      commit-message: ${{ github.event.head_commit.message }}
+      commit-message: ${{ github.event.pull_request.title || '' }}
+
+  changes:
+    name: Detect application changes
+    needs: version
+    uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
+    with:
+      patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
+
+  build-and-test:
+    name: Build and test
+    needs: changes
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
+    with:
+      artifact-name: lambda-jar
+      artifact-path: build/libs/
+
+  release-gate:
+    name: Check release gate
+    needs: build-and-test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: yola-org/shared-workflows/.github/workflows/reusable-release-gate.yml@main
+    with:
+      base-branch: main
+      require-merged-pr: true
 
   docker:
     name: Build and push image
-    needs: [changes, test-and-build, version]
+    needs: [version, changes, release-gate]
     if: >-
       always() &&
+      needs.release-gate.result == 'success' &&
+      needs.release-gate.outputs.release == 'true' &&
       needs.changes.result == 'success' &&
-      needs.changes.outputs.changed == 'true' &&
-      needs.test-and-build.result == 'success' &&
-      needs.version.result == 'success' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'push'
+      needs.changes.outputs.changed == 'true'
     uses: yola-org/shared-workflows/.github/workflows/reusable-docker-ecr.yml@main
     with:
       image-name: vestio/image-optimizer
@@ -86,8 +103,8 @@ jobs:
 
   infra-bump:
     name: Open aws-infra version bump
-    needs: [version, docker]
-    if: ${{ needs.docker.result == 'success' }}
+    needs: [version, tag]
+    if: ${{ needs.tag.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
