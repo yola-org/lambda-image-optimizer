@@ -106,7 +106,6 @@ update-aws-infra:
     - job: version:calculate
       artifacts: true
     - job: docker-build-push
-    - job: git-tag
   variables:
     INFRA_PROJECT_PATH: "aws-infra"
     INFRA_COMPONENT: "image-optimizer"
