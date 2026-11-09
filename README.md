@@ -57,9 +57,9 @@ The image uses `public.ecr.aws/lambda/java:25`, an Amazon Linux 2023 Lambda base
 
 GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
-- **Verification Phase (Concurrent):** `version`, `changes`, and `gradle` (runs `test` and `build -x test` package) run in parallel to maximize speed and fail fast.
+- **Verification Phase (Concurrent):** `version` and `gradle` (runs `test` and `build -x test` package) run in parallel to maximize speed and fail fast.
 - **Pull Request / Branch MR:** Only the concurrent verification phase runs. All downstream release jobs are skipped. Duplicate runs are prevented via branch triggers (`branches: [main]`) and concurrency cancellation (`cancel-in-progress: true`).
-- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge. If application inputs changed:
+- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge and triggers the release jobs:
   1. `docker`: Builds and pushes the Docker container image to Amazon ECR.
   2. `tag`: Creates and pushes the git release tag.
   3. `infra-bump`: Opens a PR against `yola-org/aws-infra` to bump `image_optimizer_image_tag`.

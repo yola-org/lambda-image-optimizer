@@ -1,9 +1,8 @@
 # Image optimizer Lambda pipeline.
 #
 # Shared logic lives in yola-org/shared-workflows. Verification jobs (version,
-# changes, Gradle test & package) run concurrently. Release jobs only run on
-# main after a pull request is merged, and only when application or Docker
-# build inputs have changed.
+# Gradle test & package) run concurrently. Release jobs only run on main after
+# a pull request is merged.
 
 name: CI
 
@@ -32,12 +31,6 @@ jobs:
       tag: false
       commit-message: ${{ github.event.pull_request.title || '' }}
 
-  changes:
-    name: Detect application changes
-    uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
-    with:
-      patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
-
   gradle:
     name: Gradle
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
@@ -58,13 +51,11 @@ jobs:
 
   docker:
     name: Build and push image
-    needs: [release-gate, changes, version, gradle]
+    needs: [release-gate, version, gradle]
     if: >-
       always() &&
       needs.release-gate.result == 'success' &&
       needs.release-gate.outputs.release == 'true' &&
-      needs.changes.result == 'success' &&
-      needs.changes.outputs.changed == 'true' &&
       needs.version.result == 'success' &&
       needs.gradle.result == 'success'
     uses: yola-org/shared-workflows/.github/workflows/reusable-docker-ecr.yml@main
