@@ -40,7 +40,7 @@ workflow:
 
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
-        - src/**
+        - src/**/*
 
         # Gradle build configuration
         - build.gradle
@@ -50,10 +50,10 @@ workflow:
         - gradle.properties
         - gradlew
         - gradlew.bat
-        - gradle/**
+        - gradle/**/*
 
         # Additional build logic
-        - buildSrc/**
+        - buildSrc/**/*
 
         # Docker build inputs
         - Dockerfile
