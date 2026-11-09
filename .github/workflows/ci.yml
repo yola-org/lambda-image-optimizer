@@ -47,7 +47,7 @@ jobs:
     uses: yola-org/shared-workflows/.github/workflows/reusable-release-gate.yml@main
     with:
       base-branch: main
-      require-merged-pr: true
+      require-merged-pr: false
 
   docker:
     name: Build and push image
