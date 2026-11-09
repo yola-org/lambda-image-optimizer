@@ -31,6 +31,36 @@ workflow:
       when: never
     - if: $CI_COMMIT_BRANCH
 
+# Release jobs run only on main, unless VERSION_SKIP is enabled,
+# and only when application or Docker build inputs have changed.
+.release-on-app-change:
+  rules:
+    - if: $VERSION_SKIP == "true"
+      when: never
+
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - src/**
+
+        # Gradle build configuration
+        - build.gradle
+        - build.gradle.kts
+        - settings.gradle
+        - settings.gradle.kts
+        - gradle.properties
+        - gradlew
+        - gradlew.bat
+        - gradle/**
+
+        # Additional build logic
+        - buildSrc/**
+
+        # Docker build inputs
+        - Dockerfile
+        - .dockerignore
+
+    - when: never
+
 # Release jobs only run on the default branch (main), i.e. after a merge.
 # VERSION_SKIP=true disables every versioned release job consistently.
 .default-branch-only:
@@ -59,26 +89,24 @@ build:
     - job: test
 
 docker-build-push:
-  extends: [.docker-build-push-ecr, .default-branch-only]
+  extends: [.docker-build-push-ecr, .release-on-app-change]
   variables:
     DOCKER_IMAGE_NAME: "vestio/image-optimizer"
 
 git-tag:
-  extends: [.version:tag, .default-branch-only]
+  extends: [.version:tag, .release-on-app-change]
   needs:
-    # VERSION / GIT_TAG come from this job's dotenv artifact. `needs` must list
-    # it directly: dotenv variables are not inherited transitively.
     - job: version:calculate
       artifacts: true
     - job: docker-build-push
 
 update-aws-infra:
-  extends: [.update-infra-image-tag, .default-branch-only]
+  extends: [.update-infra-image-tag, .release-on-app-change]
   needs:
-    # Only bump the infra tag after the image has actually been pushed.
     - job: version:calculate
       artifacts: true
     - job: docker-build-push
+    - job: git-tag
   variables:
     INFRA_PROJECT_PATH: "aws-infra"
     INFRA_COMPONENT: "image-optimizer"

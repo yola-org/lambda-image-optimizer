@@ -4,8 +4,7 @@ record ImageSettings(String bucketName, String sourceJdbcUrl) {
 
     static ImageSettings fromEnvironment() {
         String bucketName = required("S3_ASSETS_BUCKET");
-        String sourceJdbcUrl = required("PRIMARY_JDBC_URL");
-        return new ImageSettings(bucketName, sourceJdbcUrl);
+        return new ImageSettings(bucketName, null);
     }
 
     private static String required(String name) {
