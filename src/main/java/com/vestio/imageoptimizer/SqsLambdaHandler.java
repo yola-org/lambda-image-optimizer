@@ -15,17 +15,8 @@ import java.util.logging.Logger;
 /** SQS handler. Configure the event source mapping with ReportBatchItemFailures. */
 public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatchResponse> {
     private static final Logger LOGGER = Logger.getLogger(SqsLambdaHandler.class.getName());
-    private final ObjectMapper objectMapper;
-    private final ImageOptimizer imageOptimizer;
-
-    public SqsLambdaHandler() {
-        this(new ObjectMapper(), new ImageOptimizer(S3Client.create(), ImageSettings.fromEnvironment()));
-    }
-
-    SqsLambdaHandler(ObjectMapper objectMapper, ImageOptimizer imageOptimizer) {
-        this.objectMapper = objectMapper;
-        this.imageOptimizer = imageOptimizer;
-    }
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ImageOptimizer imageOptimizer = new ImageOptimizer(S3Client.create(), ImageSettings.fromEnvironment());
 
     @Override
     public SQSBatchResponse handleRequest(SQSEvent event, Context context) {

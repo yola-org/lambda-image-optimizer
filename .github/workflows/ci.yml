@@ -1,7 +1,7 @@
 # Image optimizer Lambda pipeline.
 #
-# Shared logic lives in yola-org/ci-templates. Release jobs only run on main,
-# and only when application or Docker build inputs have changed.
+# Shared logic lives in yola-org/shared-workflows. Release jobs only run on
+# main, and only when application or Docker build inputs have changed.
 
 name: CI
 
@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write # push release tags
-  id-token: write # AWS OIDC
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -22,34 +21,9 @@ concurrency:
 jobs:
   changes:
     name: Detect application changes
-    runs-on: ubuntu-latest
-    outputs:
-      app: ${{ steps.filter.outputs.app }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - id: filter
-        name: Filter changed paths
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          BASE="${{ github.event.before }}"
-          if [ -z "$BASE" ] ||
-            [ "$BASE" = "0000000000000000000000000000000000000000" ] ||
-            ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
-          fi
-
-          CHANGED="$(git diff --name-only "$BASE" "${{ github.sha }}")"
-          echo "$CHANGED" | sed 's/^/  /'
-
-          if echo "$CHANGED" | grep -Eq '^(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/)'; then
-            echo "app=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "app=false" >> "$GITHUB_OUTPUT"
-          fi
+    uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
+    with:
+      patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
 
   test-and-build:
     name: Test and package
@@ -61,18 +35,20 @@ jobs:
   version:
     name: Calculate version
     if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    permissions:
+      contents: write
     uses: yola-org/shared-workflows/.github/workflows/reusable-version.yml@main
     with:
       tag: false
       commit-message: ${{ github.event.head_commit.message }}
-    secrets: inherit
 
   docker:
     name: Build and push image
     needs: [changes, test-and-build, version]
     if: >-
       always() &&
-      needs.changes.outputs.app == 'true' &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.changed == 'true' &&
       needs.test-and-build.result == 'success' &&
       needs.version.result == 'success' &&
       github.ref == 'refs/heads/main' &&
@@ -82,11 +58,13 @@ jobs:
       image-name: vestio/image-optimizer
       version: ${{ needs.version.outputs.version }}
       ecr-registry: ${{ vars.ECR_REGISTRY }}
-      aws-region: ${{ vars.AWS_REGION || 'ca-central-1' }}
+      aws-region: ${{ vars.AWS_REGION }}
       artifact-name: lambda-jar
       artifact-path: build/libs
       build-args: APP_VERSION=${{ needs.version.outputs.version }}
-    secrets: inherit
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
   tag:
     name: Tag release
@@ -104,7 +82,7 @@ jobs:
         with:
           version: ${{ needs.version.outputs.version }}
           git-tag: ${{ needs.version.outputs.git_tag }}
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.INFRA_GITHUB_TOKEN }}
 
   infra-bump:
     name: Open aws-infra version bump
@@ -123,4 +101,4 @@ jobs:
           target-branch: dev
           target-file: envs/dev/terraform.tfvars
           env-label: dev
-          token: ${{ secrets.INFRA_TOKEN }}
+          token: ${{ secrets.INFRA_GITHUB_TOKEN }}
