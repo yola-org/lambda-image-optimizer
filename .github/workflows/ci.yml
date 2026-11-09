@@ -1,11 +1,9 @@
 # Image optimizer Lambda pipeline.
 #
-# Shared logic lives in yola-org/shared-workflows. Release jobs only run on
+# Shared logic lives in yola-org/shared-workflows. Verification jobs (version,
+# changes, Gradle test & package) run concurrently. Release jobs only run on
 # main after a pull request is merged, and only when application or Docker
 # build inputs have changed.
-#
-# Execution sequence:
-#   version -> changes -> build-and-test -> release-gate -> docker -> tag -> infra-bump
 
 name: CI
 
@@ -36,14 +34,12 @@ jobs:
 
   changes:
     name: Detect application changes
-    needs: version
     uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
     with:
       patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
 
-  build-and-test:
-    name: Build and test
-    needs: changes
+  gradle:
+    name: Gradle
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
     with:
       artifact-name: lambda-jar
@@ -51,7 +47,6 @@ jobs:
 
   release-gate:
     name: Check release gate
-    needs: build-and-test
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
@@ -63,13 +58,15 @@ jobs:
 
   docker:
     name: Build and push image
-    needs: [version, changes, release-gate]
+    needs: [release-gate, changes, version, gradle]
     if: >-
       always() &&
       needs.release-gate.result == 'success' &&
       needs.release-gate.outputs.release == 'true' &&
       needs.changes.result == 'success' &&
-      needs.changes.outputs.changed == 'true'
+      needs.changes.outputs.changed == 'true' &&
+      needs.version.result == 'success' &&
+      needs.gradle.result == 'success'
     uses: yola-org/shared-workflows/.github/workflows/reusable-docker-ecr.yml@main
     with:
       image-name: vestio/image-optimizer

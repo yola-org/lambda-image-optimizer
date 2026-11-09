@@ -44,6 +44,8 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
         }
         if (!failures.isEmpty()) {
             LOGGER.warning(failures.size() + " of " + event.getRecords().size() + " SQS message(s) failed");
+        } else {
+            LOGGER.info("Successfully processed all " + event.getRecords().size() + " SQS record(s)");
         }
         return new SQSBatchResponse(failures);
     }
