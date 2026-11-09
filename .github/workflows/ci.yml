@@ -1,0 +1,126 @@
+# Image optimizer Lambda pipeline.
+#
+# Shared logic lives in yola-org/ci-templates. Release jobs only run on main,
+# and only when application or Docker build inputs have changed.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # push release tags
+  id-token: write # AWS OIDC
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Detect application changes
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Filter changed paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.before }}"
+          if [ -z "$BASE" ] ||
+            [ "$BASE" = "0000000000000000000000000000000000000000" ] ||
+            ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+          CHANGED="$(git diff --name-only "$BASE" "${{ github.sha }}")"
+          echo "$CHANGED" | sed 's/^/  /'
+
+          if echo "$CHANGED" | grep -Eq '^(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/)'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test-and-build:
+    name: Test and package
+    uses: yola-org/ci-templates/.github/workflows/reusable-gradle.yml@main
+    with:
+      artifact-name: lambda-jar
+      artifact-path: build/libs/
+
+  version:
+    name: Calculate version
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    uses: yola-org/ci-templates/.github/workflows/reusable-version.yml@main
+    with:
+      tag: false
+      commit-message: ${{ github.event.head_commit.message }}
+    secrets: inherit
+
+  docker:
+    name: Build and push image
+    needs: [changes, test-and-build, version]
+    if: >-
+      always() &&
+      needs.changes.outputs.app == 'true' &&
+      needs.test-and-build.result == 'success' &&
+      needs.version.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push'
+    uses: yola-org/ci-templates/.github/workflows/reusable-docker-ecr.yml@main
+    with:
+      image-name: vestio/image-optimizer
+      version: ${{ needs.version.outputs.version }}
+      ecr-registry: ${{ vars.ECR_REGISTRY }}
+      aws-region: ${{ vars.AWS_REGION || 'ca-central-1' }}
+      artifact-name: lambda-jar
+      artifact-path: build/libs
+      build-args: APP_VERSION=${{ needs.version.outputs.version }}
+    secrets: inherit
+
+  tag:
+    name: Tag release
+    needs: [version, docker]
+    if: ${{ needs.docker.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Create and push tag
+        uses: yola-org/ci-templates/.github/actions/version-tag@main
+        with:
+          version: ${{ needs.version.outputs.version }}
+          git-tag: ${{ needs.version.outputs.git_tag }}
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  infra-bump:
+    name: Open aws-infra version bump
+    needs: [version, docker]
+    if: ${{ needs.docker.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Bump image tag in aws-infra
+        uses: yola-org/ci-templates/.github/actions/bump-infra-tag@main
+        with:
+          component: image-optimizer
+          tf-var-key: image_optimizer_image_tag
+          version: ${{ needs.version.outputs.version }}
+          repository: yola-org/aws-infra
+          target-branch: dev
+          target-file: envs/dev/terraform.tfvars
+          env-label: dev
+          token: ${{ secrets.INFRA_TOKEN }}
