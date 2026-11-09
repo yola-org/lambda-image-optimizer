@@ -29,7 +29,7 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
         LOGGER.info("Processing " + event.getRecords().size() + " SQS record(s)");
         for (SQSEvent.SQSMessage message : event.getRecords()) {
             String messageId = message.getMessageId();
-            String listingId = "unknown";
+            String listingId = "null";
             try {
                 OptimizationRequest request = objectMapper.readValue(message.getBody(), OptimizationRequest.class);
                 listingId = request.listingId();
