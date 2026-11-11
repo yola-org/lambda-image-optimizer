@@ -22,6 +22,8 @@ dependencies {
     // AWS SDK v2
     implementation platform('software.amazon.awssdk:bom:2.31.22')
     implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:secretsmanager'
+    runtimeOnly 'org.postgresql:postgresql:42.7.14'
 
     // Message parsing and WebP ImageIO writer (includes Linux native binaries)
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'

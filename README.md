@@ -39,8 +39,11 @@ optimized/listing-123/uploads/a/kitchen/thumbnail-mobile.webp
 | `SOURCE_BUCKET` | Yes | Default source S3 bucket |
 | `OUTPUT_BUCKET` | No | Bucket for WebP files; defaults to `SOURCE_BUCKET` |
 | `OUTPUT_PREFIX` | No | Output key prefix; defaults to `optimized` |
+| `APP_DEV` | No | Set to `true` to use `DEV/PRIMARY_JDBC_URL`. Defaults to `PROD/PRIMARY_JDBC_URL`. |
 
 Enable `ReportBatchItemFailures` on the SQS event source mapping. A malformed message or failed S3/image operation is returned as a failed record, without retrying successful batch records.
+
+Before processing each nonempty batch, the Lambda reads the selected secret from AWS Secrets Manager, opens a PostgreSQL JDBC connection, and immediately closes it without issuing a query. Store the URL with its required connection parameters as the secret string or under the `JDBC_PRIMARY_URL` key in a JSON secret. The Lambda execution role needs `secretsmanager:GetSecretValue` on the selected secret and network access to Secrets Manager and PostgreSQL. If the connection check fails, the entire batch is retried.
 
 The Lambda role needs `s3:GetObject` and `s3:DeleteObject` on source objects, plus `s3:PutObject` and `s3:HeadObject` on the output prefix. If the output bucket differs, source deletion still occurs only after all output writes for the whole message have returned successfully.
 
@@ -57,9 +60,9 @@ The image uses `public.ecr.aws/lambda/java:25`, an Amazon Linux 2023 Lambda base
 
 GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
-- **Verification Phase (Concurrent):** `version`, `changes`, and `gradle` (runs `test` and `build -x test` package) run in parallel to maximize speed and fail fast.
+- **Verification Phase (Concurrent):** `version` and `gradle` (runs `test` and `build -x test` package) run in parallel to maximize speed and fail fast.
 - **Pull Request / Branch MR:** Only the concurrent verification phase runs. All downstream release jobs are skipped. Duplicate runs are prevented via branch triggers (`branches: [main]`) and concurrency cancellation (`cancel-in-progress: true`).
-- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge. If application inputs changed:
+- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge and triggers the release jobs:
   1. `docker`: Builds and pushes the Docker container image to Amazon ECR.
   2. `tag`: Creates and pushes the git release tag.
   3. `infra-bump`: Opens a PR against `yola-org/aws-infra` to bump `image_optimizer_image_tag`.
