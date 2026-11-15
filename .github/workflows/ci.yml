@@ -1,8 +1,7 @@
 # Image optimizer Lambda pipeline.
 #
-# Shared logic lives in yola-org/shared-workflows. Verification jobs (version,
-# Gradle test & package) run concurrently. Release jobs only run on main after
-# a pull request is merged.
+# Shared logic lives in yola-org/shared-workflows. Verification jobs run
+# concurrently. Release jobs run on pushes to main.
 
 name: CI
 
@@ -37,6 +36,35 @@ jobs:
     with:
       artifact-name: lambda-jar
       artifact-path: build/libs/
+      test-command: ./gradlew test -x jacocoTestReport
+      build-command: ./gradlew stageLambda
+
+  spotbugs-main:
+    name: SpotBugs main
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    with:
+      task: spotbugsMain
+      report-path: build/reports/spotbugs/main.html
+
+  spotbugs-test:
+    name: SpotBugs test
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    with:
+      task: spotbugsTest
+      report-path: build/reports/spotbugs/test.html
+
+  spotless:
+    name: Spotless
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    with:
+      task: spotlessCheck
+
+  jacoco:
+    name: JaCoCo
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    with:
+      task: jacocoTestReport
+      report-path: build/reports/jacoco/test/
 
   release-gate:
     name: Check release gate
@@ -51,16 +79,22 @@ jobs:
 
   docker:
     name: Build and push image
-    needs: [release-gate, version, gradle]
+    needs: [release-gate, version, gradle, spotbugs-main, spotbugs-test, spotless, jacoco]
     if: >-
       always() &&
       needs.release-gate.result == 'success' &&
       needs.release-gate.outputs.release == 'true' &&
       needs.version.result == 'success' &&
-      needs.gradle.result == 'success'
+      needs.gradle.result == 'success' &&
+      needs.spotbugs-main.result == 'success' &&
+      needs.spotbugs-test.result == 'success' &&
+      needs.spotless.result == 'success' &&
+      needs.jacoco.result == 'success'
     uses: yola-org/shared-workflows/.github/workflows/reusable-docker-ecr.yml@main
     with:
       image-name: vestio/image-optimizer
+      platforms: linux/amd64
+      provenance: 'false'
       version: ${{ needs.version.outputs.version }}
       ecr-registry: ${{ vars.ECR_REGISTRY }}
       aws-region: ${{ vars.AWS_REGION }}
