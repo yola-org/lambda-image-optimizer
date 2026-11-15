@@ -1,7 +1,10 @@
+import com.github.spotbugs.snom.SpotBugsTask
 
 plugins {
-    id 'java'
-    id 'com.gradleup.shadow' version '8.3.6'
+    id 'application'
+    id 'jacoco'
+    id 'com.diffplug.spotless' version '8.11.0'
+    id 'com.github.spotbugs' version '6.5.13'
 }
 
 java {
@@ -15,6 +18,9 @@ repositories {
 }
 
 dependencies {
+    implementation platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
     // AWS Lambda
     implementation 'com.amazonaws:aws-lambda-java-core:1.2.2'
     implementation 'com.amazonaws:aws-lambda-java-events:3.11.1'
@@ -23,7 +29,7 @@ dependencies {
     implementation platform('software.amazon.awssdk:bom:2.31.22')
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:secretsmanager'
-    runtimeOnly 'org.postgresql:postgresql:42.7.14'
+    runtimeOnly 'org.postgresql:postgresql'
 
     // Message parsing and WebP ImageIO writer (includes Linux native binaries)
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
@@ -31,26 +37,61 @@ dependencies {
 
     // Testing
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testImplementation 'org.mockito:mockito-core'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'com.h2database:h2'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
+    finalizedBy tasks.named('jacocoTestReport')
 }
 
-// Disable the standard JAR
+spotless {
+    java {
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+jacoco {
+    toolVersion = '0.8.15'
+}
+
+tasks.named('jacocoTestReport') {
+    dependsOn tasks.named('test')
+    reports {
+        html.required = true
+        xml.required = true
+    }
+}
+
+spotbugs {
+    ignoreFailures = true
+}
+
+tasks.withType(SpotBugsTask).configureEach {
+    reports.create('html') {
+        required = true
+    }
+}
+
+application {
+    mainClass = 'com.vestio.imageoptimizer.ImageOptimizerApplication'
+    applicationDefaultJvmArgs = ['--enable-native-access=ALL-UNNAMED']
+}
+
 tasks.named('jar') {
-    enabled = false
+    destinationDirectory = layout.buildDirectory.dir('app')
 }
 
-// Generate a fat JAR with all dependencies
-tasks.named('shadowJar') {
-    archiveClassifier.set('all')
-    mergeServiceFiles()
+tasks.register('stageLambda', Sync) {
+    from(tasks.named('jar'))
+    from(configurations.runtimeClasspath)
+    into(layout.buildDirectory.dir('libs'))
 }
 
-// Build generates the fat JAR
 tasks.named('build') {
-    dependsOn tasks.named('shadowJar')
+    dependsOn tasks.named('stageLambda')
 }

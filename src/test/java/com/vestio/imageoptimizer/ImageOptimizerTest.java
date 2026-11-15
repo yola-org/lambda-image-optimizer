@@ -30,15 +30,15 @@ class ImageOptimizerTest {
             if (method.getName().equals("serviceName")) return "S3";
             throw new UnsupportedOperationException(method.getName());
         });
-        ImageOptimizer optimizer = new ImageOptimizer(s3, new ImageSettings("source", "jdbc:postgresql://localhost/test"));
+        ImageOptimizer optimizer = new ImageOptimizer(s3, new ImageSettings("source", "secret-arn"));
 
         optimizer.optimize(new OptimizationRequest("listing-1", List.of("uploads/kitchen.jpg")));
 
         assertEquals(3, uploads.size());
         assertEquals(List.of(
-                "listings/listing-1/uploads/kitchen/original.webp",
-                "listings/listing-1/uploads/kitchen/thumbnail.webp",
-                "listings/listing-1/uploads/kitchen/thumbnail-mobile.webp"),
+                "uploads/kitchen-thumbnail.webp",
+                "uploads/kitchen-thumbnail-mobile.webp",
+                "uploads/kitchen.webp"),
                 uploads.stream().map(PutObjectRequest::key).toList());
         assertTrue(uploads.stream().allMatch(it -> "image/webp".equals(it.contentType())));
         assertEquals(List.of("uploads/kitchen.jpg"), deletions.stream().map(DeleteObjectRequest::key).toList());

@@ -1,6 +1,6 @@
 # Lambda image optimizer
 
-Java 25 AWS Lambda that consumes SQS messages, converts each listed S3 image to WebP, and deletes the source only after every output was successfully uploaded. It is intentionally a small Lambda handler, not Spring Boot: this keeps startup time, memory use, and the container image smaller.
+The Java 25 Spring Boot image optimizer runs as an SQS-triggered Lambda or as a command-line job. It converts listing images to WebP and uses Hibernate to record optimized filenames and advance listing status.
 
 ## Outputs
 
@@ -9,62 +9,63 @@ Each input image produces aspect-ratio-preserving WebP files. Images are never e
 | Rendition | Maximum longest edge | WebP quality | Intended use |
 | --- | ---: | ---: | --- |
 | `original.webp` | 2560px | 90 | Listing detail / high-resolution display |
-| `thumbnail.webp` | 960px | 84 | Desktop cards and galleries |
-| `thumbnail-mobile.webp` | 480px | 82 | Mobile cards and constrained connections |
+| `original-thumbnail.webp` | 960px | 84 | Desktop cards and galleries |
+| `original-thumbnail-mobile.webp` | 480px | 82 | Mobile cards and constrained connections |
 
-For input key `uploads/a/kitchen.jpg` and listing `listing-123`, outputs are:
+The backend stores uploaded images as `listings/<listing-id>/<asset-id>/original.<ext>`. The Lambda keeps the directory and basename and writes these siblings:
 
 ```text
-optimized/listing-123/uploads/a/kitchen/original.webp
-optimized/listing-123/uploads/a/kitchen/thumbnail.webp
-optimized/listing-123/uploads/a/kitchen/thumbnail-mobile.webp
+listings/<listing-id>/<asset-id>/original.webp
+listings/<listing-id>/<asset-id>/original-thumbnail.webp
+listings/<listing-id>/<asset-id>/original-thumbnail-mobile.webp
 ```
+
+Each non-WebP source is deleted after every rendition for its SQS message has been written. A WebP input is replaced in place after its smaller renditions are written. Retries reuse completed outputs. When needed, the Lambda copies older renditions into the current layout.
 
 ## SQS message contract
 
 ```json
 {
-  "listingId": "listing-123",
-  "bucket": "optional-source-bucket",
-  "assetKeys": ["uploads/a/kitchen.jpg", "uploads/a/front.png"]
+  "userId": "1e817a52-4eba-4174-87b9-3102aa7552e0",
+  "listingId": "81297688-1533-4f03-abd2-8be5d6ea8e96",
+  "assetKeys": ["listings/81297688-1533-4f03-abd2-8be5d6ea8e96/969680cf-17ff-4492-b4f6-6a58c309025c/original.png"]
 }
 ```
 
-`keys` is also accepted in place of `assetKeys`. The `bucket` field is optional; when absent the configured `SOURCE_BUCKET` is used.
+`keys` is also accepted in place of `assetKeys`. Enable `ReportBatchItemFailures` on the event source mapping so SQS can retry failed records individually.
+
+Hibernate stores `original.webp` in `listing_asset_keys.optimized_name` for each completed asset. The Lambda advances a listing from `AWAITING_ASSETS` to `AVAILABLE` once all of its current assets have optimized filenames. Run the backend Liquibase migrations before deploying this Lambda version.
 
 ## Configuration
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `SOURCE_BUCKET` | Yes | Default source S3 bucket |
-| `OUTPUT_BUCKET` | No | Bucket for WebP files; defaults to `SOURCE_BUCKET` |
-| `OUTPUT_PREFIX` | No | Output key prefix; defaults to `optimized` |
-| `APP_DEV` | No | Set to `true` to use `DEV/PRIMARY_JDBC_URL`. Defaults to `PROD/PRIMARY_JDBC_URL`. |
+| Variable | Description |
+| --- | --- |
+| `S3_ASSETS_BUCKET` | Bucket for source images and optimized outputs |
+| `PRIMARY_JDBC_SECRET_ARN` | ARN of the environment's `PRIMARY_JDBC_URL` secret |
 
-Enable `ReportBatchItemFailures` on the SQS event source mapping. A malformed message or failed S3/image operation is returned as a failed record, without retrying successful batch records.
+The Lambda reads the secret when it opens a database connection. The secret can contain a plain PostgreSQL JDBC URL or a JSON property named `PRIMARY_JDBC_URL` or `JDBC_PRIMARY_URL`. The execution role needs `secretsmanager:GetSecretValue` for the secret and `kms:Decrypt` if a customer-managed key protects it. It also needs S3 object read, write and delete permissions, bucket listing permission, and network access to PostgreSQL.
 
-Before processing each nonempty batch, the Lambda reads the selected secret from AWS Secrets Manager, opens a PostgreSQL JDBC connection, and immediately closes it without issuing a query. Store the URL with its required connection parameters as the secret string or under the `JDBC_PRIMARY_URL` key in a JSON secret. The Lambda execution role needs `secretsmanager:GetSecretValue` on the selected secret and network access to Secrets Manager and PostgreSQL. If the connection check fails, the entire batch is retried.
-
-The Lambda role needs `s3:GetObject` and `s3:DeleteObject` on source objects, plus `s3:PutObject` and `s3:HeadObject` on the output prefix. If the output bucket differs, source deletion still occurs only after all output writes for the whole message have returned successfully.
-
-## Build and deploy
+## Build and run
 
 ```bash
-./gradlew test build
-docker build -t image-optimizer .
+./gradlew build
+docker build -f docker/Dockerfile -t image-optimizer .
 ```
 
-The image uses `public.ecr.aws/lambda/java:25`, an Amazon Linux 2023 Lambda base image. Configure the Lambda with enough memory for its largest input image (start with 1,024 MB) and a timeout appropriate to the batch size (start with 60 seconds).
+Run the same workflow with the Spring Boot `CommandLineRunner` by setting `S3_ASSETS_BUCKET`, `PRIMARY_JDBC_SECRET_ARN`, and the AWS SDK region and credentials for the chosen environment:
+
+```bash
+./gradlew run --args='/path/to/request.json'
+```
 
 ## CI/CD Workflow
 
 GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
-- **Verification Phase (Concurrent):** `version` and `gradle` (runs `test` and `build -x test` package) run in parallel to maximize speed and fail fast.
-- **Pull Request / Branch MR:** Only the concurrent verification phase runs. All downstream release jobs are skipped. Duplicate runs are prevented via branch triggers (`branches: [main]`) and concurrency cancellation (`cancel-in-progress: true`).
-- **Merged PR on `main`:** When a branch is merged into `main`, `release-gate` confirms the merge and triggers the release jobs:
+- **Verification:** Version calculation, Gradle tests, Spotless, JaCoCo, and the two SpotBugs jobs run independently. The Gradle job packages the runtime files with `stageLambda` after its tests pass. CI uploads the JaCoCo and SpotBugs reports. SpotBugs findings are report-only.
+- **Pull requests to `main` and manual runs:** The workflow runs verification jobs.
+- **Pushes to `main`:** After the release gate and verification jobs succeed, the workflow runs the release jobs:
   1. `docker`: Builds and pushes the Docker container image to Amazon ECR.
   2. `tag`: Creates and pushes the git release tag.
   3. `infra-bump`: Opens a PR against `yola-org/aws-infra` to bump `image_optimizer_image_tag`.
-- **Direct pushes to `main`:** Blocked from triggering release actions by the release gate.
 

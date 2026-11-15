@@ -1,9 +1,11 @@
 package com.vestio.imageoptimizer;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 /** Payload for one listing. `keys` is accepted as an alias for `assetKeys`. */
+@JsonIgnoreProperties("userId")
 public record OptimizationRequest(String listingId, @JsonAlias("keys") List<String> assetKeys) {
     public OptimizationRequest {
         if (listingId == null || listingId.isBlank()) throw new IllegalArgumentException("[listingId] is required");
