@@ -3,6 +3,8 @@ package com.vestio.imageoptimizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -42,8 +44,8 @@ class ImageOptimizerResourceTest {
     private static final String RESOURCE = "/img.png";
     private static final String SOURCE_KEY = "uploads/photo.png";
     private static final String ORIGINAL_KEY = "uploads/photo.webp";
-    private static final String THUMBNAIL_KEY = "uploads/photo-thumbnail.webp";
-    private static final String MOBILE_KEY = "uploads/photo-thumbnail-mobile.webp";
+    private static final String THUMBNAIL_KEY = "uploads/photo_thumbnail.webp";
+    private static final String MOBILE_KEY = "uploads/photo_thumbnail_mobile.webp";
     private static final Path OUTPUT_DIRECTORY = Path.of("build", "test-optimized-output");
 
     @BeforeAll
@@ -72,14 +74,15 @@ class ImageOptimizerResourceTest {
                 s3.events());
     }
 
-    @Test
-    void processesTheBackendEventAndPersistsAfterWritingAllExpectedWebpKeys() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void processesTheBackendEventAndPersistsAfterWritingAllExpectedWebpKeys(boolean legacySource) throws Exception {
         UUID listingId = UUID.randomUUID();
-        String stem = "listings/" + listingId + "/" + UUID.randomUUID() + "/original";
-        String sourceKey = stem + ".png";
+        String stem = "listings/" + listingId + "/" + UUID.randomUUID();
+        String sourceKey = stem + (legacySource ? "/original.png" : ".png");
         String original = stem + ".webp";
-        String thumbnail = stem + "-thumbnail.webp";
-        String mobile = stem + "-thumbnail-mobile.webp";
+        String thumbnail = stem + "_thumbnail.webp";
+        String mobile = stem + "_thumbnail_mobile.webp";
         OptimizationRequest request = new ObjectMapper().readValue("""
                 {"userId":"%s","listingId":"%s","assetKeys":["%s"]}
                 """.formatted(UUID.randomUUID(), listingId, sourceKey), OptimizationRequest.class);
@@ -89,7 +92,7 @@ class ImageOptimizerResourceTest {
             assertEquals(List.of("put:" + thumbnail, "put:" + mobile, "put:" + original, "delete:" + sourceKey),
                     s3.events());
             return null;
-        }).when(statusUpdater).updateOptimizedAssets(listingId);
+        }).when(statusUpdater).markAvailableWhenReady(listingId);
 
         new OptimizationService(optimizer(s3), statusUpdater).process(request);
 
@@ -100,7 +103,7 @@ class ImageOptimizerResourceTest {
             assertEquals("image/webp", upload.request().contentType());
             assertNotNull(decode(upload.bytes()), upload.key());
         }
-        verify(statusUpdater).updateOptimizedAssets(listingId);
+        verify(statusUpdater).markAvailableWhenReady(listingId);
     }
 
     @Test
@@ -221,7 +224,7 @@ class ImageOptimizerResourceTest {
     }
 
     private static int longestEdge(String key) {
-        if (key.endsWith("thumbnail-mobile.webp")) return 480;
+        if (key.endsWith("thumbnail_mobile.webp")) return 480;
         if (key.endsWith("thumbnail.webp")) return 960;
         return 2560;
     }

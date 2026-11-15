@@ -15,11 +15,10 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 class ListingStatusUpdaterTest {
     @Test
-    void recordsEachOptimizedNameAndMovesToAvailableAfterAllCurrentAssetsAreReady() {
+    void movesToAvailableAfterAllCurrentAssetsAreReadyWithTheExistingSchema() {
         UUID listingId = UUID.randomUUID();
         UUID firstAsset = UUID.randomUUID();
         UUID secondAsset = UUID.randomUUID();
@@ -30,9 +29,17 @@ class ListingStatusUpdaterTest {
         try (var factory = new Configuration()
                 .addAnnotatedClass(OptimizerListing.class)
                 .setProperty("hibernate.connection.url", "jdbc:h2:mem:listing-optimizer")
-                .setProperty("hibernate.hbm2ddl.auto", "create-drop")
                 .buildSessionFactory()) {
             factory.inTransaction(session -> {
+                session.createNativeMutationQuery("""
+                        CREATE TABLE listings (id UUID PRIMARY KEY, status VARCHAR(255), updated_at TIMESTAMP)
+                        """).executeUpdate();
+                session.createNativeMutationQuery("""
+                        CREATE TABLE listing_asset_keys (
+                            listing_id UUID NOT NULL, position INT NOT NULL, asset_key UUID NOT NULL,
+                            PRIMARY KEY (listing_id, position)
+                        )
+                        """).executeUpdate();
                 session.createNativeMutationQuery("INSERT INTO listings (id, status) VALUES (:id, 'AWAITING_ASSETS')")
                         .setParameter("id", listingId).executeUpdate();
                 List<UUID> assets = List.of(firstAsset, secondAsset);
@@ -49,25 +56,17 @@ class ListingStatusUpdaterTest {
             });
 
             readyAssets.add(secondAsset);
-            factory.inTransaction(session -> new ListingStatusUpdater(session, optimizer).updateOptimizedAssets(listingId));
+            factory.inTransaction(session -> new ListingStatusUpdater(session, optimizer).markAvailableWhenReady(listingId));
             factory.inTransaction(session -> {
                 assertEquals("AWAITING_ASSETS", session.createNativeQuery("SELECT status FROM listings", String.class)
                         .getSingleResult());
-                List<String> names = session.createNativeQuery("""
-                        SELECT optimized_name FROM listing_asset_keys ORDER BY position
-                        """, String.class).getResultList();
-                assertNull(names.getFirst());
-                assertEquals("original.webp", names.getLast());
             });
 
             readyAssets.add(firstAsset);
-            factory.inTransaction(session -> new ListingStatusUpdater(session, optimizer).updateOptimizedAssets(listingId));
+            factory.inTransaction(session -> new ListingStatusUpdater(session, optimizer).markAvailableWhenReady(listingId));
             factory.inTransaction(session -> {
                 assertEquals("AVAILABLE", session.createNativeQuery("SELECT status FROM listings", String.class)
                         .getSingleResult());
-                assertEquals(List.of("original.webp", "original.webp"), session.createNativeQuery("""
-                        SELECT optimized_name FROM listing_asset_keys ORDER BY position
-                        """, String.class).getResultList());
             });
         }
     }
@@ -79,7 +78,7 @@ class ListingStatusUpdaterTest {
                         throw new UnsupportedOperationException(method.getName());
                     }
                     String key = ((HeadObjectRequest) args[0]).key();
-                    if (readyAssets.stream().noneMatch(asset -> key.startsWith("listings/" + listingId + "/" + asset + "/"))) {
+                    if (readyAssets.stream().noneMatch(asset -> key.startsWith("listings/" + listingId + "/" + asset) && !key.substring(("listings/" + listingId + "/" + asset).length()).contains("/"))) {
                         throw NoSuchKeyException.builder().statusCode(404).build();
                     }
                     return HeadObjectResponse.builder().metadata(Map.of("source-key", key)).build();
