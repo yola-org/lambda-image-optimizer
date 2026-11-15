@@ -29,6 +29,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.logging.Logger;
 
 /** Downloads source assets, creates WebP renditions, then removes each source only after successful writes. */
@@ -36,8 +37,8 @@ final class ImageOptimizer {
     private static final Logger LOGGER = Logger.getLogger(ImageOptimizer.class.getName());
     private static final long MAX_PIXELS = 100_000_000L;
     private static final List<Rendition> RENDITIONS = List.of(
-            new Rendition("thumbnail", "-thumbnail", 960, 0.84f),
-            new Rendition("thumbnail-mobile", "-thumbnail-mobile", 480, 0.82f),
+            new Rendition("thumbnail", "_thumbnail", 960, 0.84f),
+            new Rendition("thumbnail-mobile", "_thumbnail_mobile", 480, 0.82f),
             new Rendition("original", "", 2560, 0.90f));
     private final S3Client s3;
     private final ImageSettings settings;
@@ -53,6 +54,9 @@ final class ImageOptimizer {
         for (String sourceKey : request.assetKeys()) {
             validateSourceKey(sourceKey);
             String stem = sourceKey.replaceFirst("\\.[^./]+$", "");
+            if (stem.startsWith("listings/" + request.listingId() + "/") && stem.endsWith("/original")) {
+                stem = stem.substring(0, stem.length() - "/original".length());
+            }
             String optimizedKey = stem + ".webp";
             ResponseBytes<GetObjectResponse> downloaded;
             try {
@@ -63,7 +67,7 @@ final class ImageOptimizer {
                 }
                 continue;
             }
-            if (sourceKey.equals(optimizedKey) && isOptimized(downloaded.response().metadata())) {
+            if (isOptimized(downloaded.response().metadata()) && ensureRenditions(request.listingId(), stem)) {
                 continue;
             }
             BufferedImage source = ImageIO.read(new ByteArrayInputStream(downloaded.asByteArray()));
@@ -90,7 +94,7 @@ final class ImageOptimizer {
     }
 
     boolean ensureListingAssetRenditions(UUID listingId, UUID assetId) {
-        return ensureRenditions(listingId.toString(), "listings/" + listingId + "/" + assetId + "/original");
+        return ensureRenditions(listingId.toString(), "listings/" + listingId + "/" + assetId);
     }
 
     private boolean ensureRenditions(String listingId, String stem) {
@@ -101,15 +105,25 @@ final class ImageOptimizer {
             return true;
         }
 
-        // Older Lambda versions kept the renditions beneath a separate prefix.
-        String legacyBase = "listings/" + listingId + "/" + stem;
-        if (!RENDITIONS.stream().allMatch(rendition -> head(rendition.legacyKey(legacyBase)) != null)) {
+        String legacyStem = stem + "/original";
+        HeadObjectResponse legacyOriginal = head(legacyStem + ".webp");
+        if (legacyOriginal != null && isOptimized(legacyOriginal.metadata())
+                && copyRenditions(stem, rendition -> rendition.nestedKey(legacyStem))) {
+            return true;
+        }
+
+        String legacyDirectory = "listings/" + listingId + "/" + legacyStem;
+        return copyRenditions(stem, rendition -> legacyDirectory + "/" + rendition.name() + ".webp");
+    }
+
+    private boolean copyRenditions(String stem, Function<Rendition, String> sourceKey) {
+        if (!RENDITIONS.stream().allMatch(rendition -> head(sourceKey.apply(rendition)) != null)) {
             return false;
         }
         String bucket = settings.bucketName();
         for (Rendition rendition : RENDITIONS) {
             s3.copyObject(CopyObjectRequest.builder()
-                    .sourceBucket(bucket).sourceKey(rendition.legacyKey(legacyBase))
+                    .sourceBucket(bucket).sourceKey(sourceKey.apply(rendition))
                     .destinationBucket(bucket).destinationKey(rendition.key(stem))
                     .build());
         }
@@ -175,8 +189,8 @@ final class ImageOptimizer {
             return stem + suffix + ".webp";
         }
 
-        String legacyKey(String directory) {
-            return directory + "/" + name + ".webp";
+        String nestedKey(String stem) {
+            return stem + suffix.replace('_', '-') + ".webp";
         }
     }
 }

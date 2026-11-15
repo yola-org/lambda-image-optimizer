@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 @Service
 final class OptimizationService {
     private static final Pattern SOURCE_PATH = Pattern.compile(
-            "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/original\\.[a-z0-9]+");
+            "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:/original)?\\.[a-z0-9]+");
 
     private final ImageOptimizer optimizer;
     private final ListingStatusUpdater listingStatusUpdater;
@@ -29,6 +29,6 @@ final class OptimizationService {
             }
         }
         optimizer.optimize(request);
-        listingStatusUpdater.updateOptimizedAssets(listingId);
+        listingStatusUpdater.markAvailableWhenReady(listingId);
     }
 }

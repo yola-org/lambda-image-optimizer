@@ -18,25 +18,13 @@ class ListingStatusUpdater {
     }
 
     @Transactional
-    public void updateOptimizedAssets(UUID listingId) {
+    public void markAvailableWhenReady(UUID listingId) {
         // The backend holds the same row lock while changing asset IDs and sending its event.
         OptimizerListing listing = entityManager.find(OptimizerListing.class, listingId, LockModeType.PESSIMISTIC_WRITE);
-        if (listing == null || listing.assets().isEmpty()) {
+        if (listing == null || !listing.isAwaitingAssets() || listing.assetKeys().isEmpty()) {
             return;
         }
-
-        boolean allOptimized = true;
-        for (OptimizerListing.Asset asset : listing.assets()) {
-            if (asset.isOptimized()) {
-                continue;
-            }
-            if (optimizer.ensureListingAssetRenditions(listingId, asset.id())) {
-                asset.setOptimizedName("original.webp");
-            } else {
-                allOptimized = false;
-            }
-        }
-        if (allOptimized) {
+        if (listing.assetKeys().stream().allMatch(assetId -> optimizer.ensureListingAssetRenditions(listingId, assetId))) {
             listing.markAvailable();
         }
     }

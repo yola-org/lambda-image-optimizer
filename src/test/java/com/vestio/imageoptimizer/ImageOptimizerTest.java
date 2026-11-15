@@ -36,8 +36,8 @@ class ImageOptimizerTest {
 
         assertEquals(3, uploads.size());
         assertEquals(List.of(
-                "uploads/kitchen-thumbnail.webp",
-                "uploads/kitchen-thumbnail-mobile.webp",
+                "uploads/kitchen_thumbnail.webp",
+                "uploads/kitchen_thumbnail_mobile.webp",
                 "uploads/kitchen.webp"),
                 uploads.stream().map(PutObjectRequest::key).toList());
         assertTrue(uploads.stream().allMatch(it -> "image/webp".equals(it.contentType())));

@@ -1,6 +1,6 @@
 # Lambda image optimizer
 
-The Java 25 Spring Boot image optimizer runs as an SQS-triggered Lambda or as a command-line job. It converts listing images to WebP and uses Hibernate to record optimized filenames and advance listing status.
+The Java 25 Spring Boot image optimizer runs as an SQS-triggered Lambda or as a command-line job. It converts listing images to WebP and uses Hibernate to advance listing status.
 
 ## Outputs
 
@@ -8,16 +8,16 @@ Each input image produces aspect-ratio-preserving WebP files. Images are never e
 
 | Rendition | Maximum longest edge | WebP quality | Intended use |
 | --- | ---: | ---: | --- |
-| `original.webp` | 2560px | 90 | Listing detail / high-resolution display |
-| `original-thumbnail.webp` | 960px | 84 | Desktop cards and galleries |
-| `original-thumbnail-mobile.webp` | 480px | 82 | Mobile cards and constrained connections |
+| `<asset-id>.webp` | 2560px | 90 | Listing detail / high-resolution display |
+| `<asset-id>_thumbnail.webp` | 960px | 84 | Desktop cards and galleries |
+| `<asset-id>_thumbnail_mobile.webp` | 480px | 82 | Mobile cards and constrained connections |
 
-The backend stores uploaded images as `listings/<listing-id>/<asset-id>/original.<ext>`. The Lambda keeps the directory and basename and writes these siblings:
+The backend stores uploaded images as `listings/<listing-id>/<asset-id>.<ext>`. The Lambda keeps the directory and basename and writes these siblings:
 
 ```text
-listings/<listing-id>/<asset-id>/original.webp
-listings/<listing-id>/<asset-id>/original-thumbnail.webp
-listings/<listing-id>/<asset-id>/original-thumbnail-mobile.webp
+listings/<listing-id>/<asset-id>.webp
+listings/<listing-id>/<asset-id>_thumbnail.webp
+listings/<listing-id>/<asset-id>_thumbnail_mobile.webp
 ```
 
 Each non-WebP source is deleted after every rendition for its SQS message has been written. A WebP input is replaced in place after its smaller renditions are written. Retries reuse completed outputs. When needed, the Lambda copies older renditions into the current layout.
@@ -28,13 +28,13 @@ Each non-WebP source is deleted after every rendition for its SQS message has be
 {
   "userId": "1e817a52-4eba-4174-87b9-3102aa7552e0",
   "listingId": "81297688-1533-4f03-abd2-8be5d6ea8e96",
-  "assetKeys": ["listings/81297688-1533-4f03-abd2-8be5d6ea8e96/969680cf-17ff-4492-b4f6-6a58c309025c/original.png"]
+  "assetKeys": ["listings/81297688-1533-4f03-abd2-8be5d6ea8e96/969680cf-17ff-4492-b4f6-6a58c309025c.png"]
 }
 ```
 
 `keys` is also accepted in place of `assetKeys`. Enable `ReportBatchItemFailures` on the event source mapping so SQS can retry failed records individually.
 
-Hibernate stores `original.webp` in `listing_asset_keys.optimized_name` for each completed asset. The Lambda advances a listing from `AWAITING_ASSETS` to `AVAILABLE` once all of its current assets have optimized filenames. Run the backend Liquibase migrations before deploying this Lambda version.
+The Lambda uses the listing's asset UUIDs to verify that all WebP renditions exist in S3 before advancing the listing from `AWAITING_ASSETS` to `AVAILABLE`.
 
 ## Configuration
 
