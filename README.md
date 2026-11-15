@@ -41,7 +41,7 @@ Hibernate stores `original.webp` in `listing_asset_keys.optimized_name` for each
 | Variable | Description |
 | --- | --- |
 | `S3_ASSETS_BUCKET` | Bucket for source images and optimized outputs |
-| `PRIMARY_JDBC_SECRET_ARN` | ARN of the environment's `PRIMARY_JDBC_URL` secret |
+| `APP_ENV` | `dev` reads `DEV/PRIMARY_JDBC_URL`. `prod` reads `PROD/PRIMARY_JDBC_URL`. |
 
 The Lambda reads the secret when it opens a database connection. The secret can contain a plain PostgreSQL JDBC URL or a JSON property named `PRIMARY_JDBC_URL` or `JDBC_PRIMARY_URL`. The execution role needs `secretsmanager:GetSecretValue` for the secret and `kms:Decrypt` if a customer-managed key protects it. It also needs S3 object read, write and delete permissions, bucket listing permission, and network access to PostgreSQL.
 
@@ -52,7 +52,7 @@ The Lambda reads the secret when it opens a database connection. The secret can 
 docker build -f docker/Dockerfile -t image-optimizer .
 ```
 
-Run the same workflow with the Spring Boot `CommandLineRunner` by setting `S3_ASSETS_BUCKET`, `PRIMARY_JDBC_SECRET_ARN`, and the AWS SDK region and credentials for the chosen environment:
+Run the same workflow with the Spring Boot `CommandLineRunner` by setting `S3_ASSETS_BUCKET`, `APP_ENV`, and the AWS SDK region and credentials for the chosen environment:
 
 ```bash
 ./gradlew run --args='/path/to/request.json'

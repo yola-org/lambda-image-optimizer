@@ -13,18 +13,18 @@ import java.sql.SQLFeatureNotSupportedException;
 
 final class SecretsManagerDataSource extends AbstractDataSource {
     private final SecretsManagerClient secretsManager;
-    private final String secretArn;
+    private final String secretName;
     private final ObjectMapper mapper;
 
-    SecretsManagerDataSource(SecretsManagerClient secretsManager, String secretArn, ObjectMapper mapper) {
+    SecretsManagerDataSource(SecretsManagerClient secretsManager, String secretName, ObjectMapper mapper) {
         this.secretsManager = secretsManager;
-        this.secretArn = secretArn;
+        this.secretName = secretName;
         this.mapper = mapper;
     }
 
     @Override
     public Connection getConnection() throws SQLException {
-        String secret = secretsManager.getSecretValue(request -> request.secretId(secretArn)).secretString();
+        String secret = secretsManager.getSecretValue(request -> request.secretId(secretName)).secretString();
         try {
             return DriverManager.getConnection(readJdbcUrl(secret));
         } catch (SQLException exception) {
