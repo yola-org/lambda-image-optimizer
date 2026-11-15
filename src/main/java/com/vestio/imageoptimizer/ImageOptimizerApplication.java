@@ -47,7 +47,7 @@ public class ImageOptimizerApplication {
 
     @Bean
     DataSource dataSource(SecretsManagerClient secretsManager, ImageSettings settings, ObjectMapper mapper) {
-        return new SecretsManagerDataSource(secretsManager, settings.jdbcSecretArn(), mapper);
+        return new SecretsManagerDataSource(secretsManager, settings.jdbcSecretName(), mapper);
     }
 
     @Bean

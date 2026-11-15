@@ -2,6 +2,8 @@ package com.vestio.imageoptimizer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentMatchers;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
 import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueRequest;
@@ -20,14 +22,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SecretsManagerDataSourceTest {
-    private static final String SECRET_ARN = "arn:aws:secretsmanager:ca-central-1:123456789012:secret:test";
     private static final String JDBC_URL = "jdbc:postgresql://unused.invalid/listings";
 
-    @Test
-    void fetchesTheConfiguredSecretAndOpensJdbcConnectionWithItsUrl() throws Exception {
+    @ParameterizedTest
+    @CsvSource({"dev, DEV/PRIMARY_JDBC_URL", "prod, PROD/PRIMARY_JDBC_URL"})
+    void fetchesTheEnvironmentSecretAndOpensJdbcConnectionWithItsUrl(String environment, String expectedName)
+            throws Exception {
         SecretsManagerClient secrets = mock(SecretsManagerClient.class);
-        GetSecretValueRequest request = stubSecret(secrets, "{\"PRIMARY_JDBC_URL\":\"" + JDBC_URL + "\"}");
-        SecretsManagerDataSource dataSource = new SecretsManagerDataSource(secrets, SECRET_ARN, new ObjectMapper());
+        GetSecretValueRequest request = stubSecret(secrets, expectedName, "{\"PRIMARY_JDBC_URL\":\"" + JDBC_URL + "\"}");
+        SecretsManagerDataSource dataSource = new SecretsManagerDataSource(
+                secrets, ImageSettings.jdbcSecretName(environment), new ObjectMapper());
         Connection connection = mock(Connection.class);
 
         try (var driverManager = mockStatic(DriverManager.class)) {
@@ -42,10 +46,16 @@ class SecretsManagerDataSourceTest {
     }
 
     @Test
+    void rejectsAnUnknownEnvironment() {
+        assertThrows(IllegalStateException.class, () -> ImageSettings.jdbcSecretName("staging"));
+    }
+
+    @Test
     void rejectsAnInvalidSecretBeforeOpeningJdbcConnection() {
         SecretsManagerClient secrets = mock(SecretsManagerClient.class);
-        GetSecretValueRequest request = stubSecret(secrets, "{\"PRIMARY_JDBC_URL\":\"invalid\"}");
-        SecretsManagerDataSource dataSource = new SecretsManagerDataSource(secrets, SECRET_ARN, new ObjectMapper());
+        String secretName = "DEV/PRIMARY_JDBC_URL";
+        GetSecretValueRequest request = stubSecret(secrets, secretName, "{\"PRIMARY_JDBC_URL\":\"invalid\"}");
+        SecretsManagerDataSource dataSource = new SecretsManagerDataSource(secrets, secretName, new ObjectMapper());
 
         try (var driverManager = mockStatic(DriverManager.class)) {
             assertThrows(IllegalStateException.class, dataSource::getConnection);
@@ -55,8 +65,8 @@ class SecretsManagerDataSourceTest {
         }
     }
 
-    private static GetSecretValueRequest stubSecret(SecretsManagerClient secrets, String value) {
-        GetSecretValueRequest request = GetSecretValueRequest.builder().secretId(SECRET_ARN).build();
+    private static GetSecretValueRequest stubSecret(SecretsManagerClient secrets, String name, String value) {
+        GetSecretValueRequest request = GetSecretValueRequest.builder().secretId(name).build();
         doCallRealMethod().when(secrets)
                 .getSecretValue(ArgumentMatchers.<Consumer<GetSecretValueRequest.Builder>>any());
         when(secrets.getSecretValue(request)).thenReturn(GetSecretValueResponse.builder().secretString(value).build());
