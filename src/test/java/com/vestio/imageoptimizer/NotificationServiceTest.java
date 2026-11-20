@@ -1,5 +1,7 @@
 package com.vestio.imageoptimizer;
 
+import com.vestio.common.event.NotificationCreated;
+
 import com.vestio.common.entity.enums.NotificationType;
 
 import com.vestio.common.publisher.AppSyncEventsPublisher;

@@ -108,7 +108,7 @@ round-trip test. Keep these model and event copies synchronized with the backend
 ### Shared events library
 
 Notifications, enums, realtime event payloads and the AppSync publisher use
-`com.vestio:vestio-common:0.1.0` from GitHub Packages. Spring repositories and
+`com.vestio:vestio-common:0.2.0` from GitHub Packages. Spring repositories and
 transaction listeners remain in this application. Shared JPA entities are included
 in the application's entity scan.
 
