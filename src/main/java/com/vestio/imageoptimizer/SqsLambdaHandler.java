@@ -5,7 +5,7 @@ import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.SQSBatchResponse;
 import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import software.amazon.awssdk.services.s3.S3Client;
+import org.springframework.context.ConfigurableApplicationContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,13 +15,13 @@ import java.util.logging.Logger;
 /** SQS handler. Configure the event source mapping with ReportBatchItemFailures. */
 public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatchResponse> {
     private static final Logger LOGGER = Logger.getLogger(SqsLambdaHandler.class.getName());
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ImageOptimizer imageOptimizer = new ImageOptimizer(S3Client.create(), ImageSettings.fromEnvironment());
-
     @Override
     public SQSBatchResponse handleRequest(SQSEvent event, Context context) {
         if (event == null || event.getRecords() == null) {
             LOGGER.warning("Received an SQS event without records");
+            return new SQSBatchResponse(List.of());
+        }
+        if (event.getRecords().isEmpty()) {
             return new SQSBatchResponse(List.of());
         }
 
@@ -29,11 +29,11 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
         LOGGER.info("Processing " + event.getRecords().size() + " SQS record(s)");
         for (SQSEvent.SQSMessage message : event.getRecords()) {
             String messageId = message.getMessageId();
-            String listingId = "unknown";
+            String listingId = "null";
             try {
-                OptimizationRequest request = objectMapper.readValue(message.getBody(), OptimizationRequest.class);
+                OptimizationRequest request = Application.MAPPER.readValue(message.getBody(), OptimizationRequest.class);
                 listingId = request.listingId();
-                imageOptimizer.optimize(request);
+                Application.SERVICE.process(request);
                 LOGGER.info("Optimized listing " + listingId + " from SQS message " + messageId);
             } catch (Exception exception) {
                 // Log the full stack trace once at the message boundary; the message is retried via ReportBatchItemFailures.
@@ -48,5 +48,11 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
             LOGGER.info("Successfully processed all " + event.getRecords().size() + " SQS record(s)");
         }
         return new SQSBatchResponse(failures);
+    }
+
+    private static final class Application {
+        private static final ConfigurableApplicationContext CONTEXT = ImageOptimizerApplication.start();
+        private static final ObjectMapper MAPPER = CONTEXT.getBean(ObjectMapper.class);
+        private static final OptimizationService SERVICE = CONTEXT.getBean(OptimizationService.class);
     }
 }
