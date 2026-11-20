@@ -2,10 +2,11 @@ package com.vestio.imageoptimizer;
 
 import com.vestio.common.entity.Notification;
 import com.vestio.common.entity.enums.NotificationType;
-import com.vestio.common.event.NotificationCreated;
+import com.vestio.common.publisher.AppSyncEventsPublisher;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import org.hibernate.cfg.Configuration;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationEventPublisher;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -29,7 +30,8 @@ class ListingStatusUpdaterTest {
         UUID second = UUID.randomUUID();
         Set<UUID> ready = new HashSet<>();
         var optimizer = new ImageOptimizer(s3WithRenditions(listingId, ready), new ImageSettings("assets", "secret"));
-        var events = mock(ApplicationEventPublisher.class);
+        var publisher = mock(AppSyncEventsPublisher.class);
+        when(publisher.dispatchNotificationEvent(any())).thenReturn(CompletableFuture.completedFuture(null));
         try (var factory = new Configuration().addAnnotatedClass(OptimizerListing.class).addAnnotatedClass(Notification.class)
                 .setProperty("hibernate.connection.url", "jdbc:h2:mem:listing-optimizer;MODE=PostgreSQL")
                 .setProperty("hibernate.hbm2ddl.auto", "create-drop").buildSessionFactory()) {
@@ -43,13 +45,21 @@ class ListingStatusUpdaterTest {
                 }
             });
             ready.add(first);
-            factory.inTransaction(session -> update(session, optimizer, events, listingId));
-            verifyNoInteractions(events);
+            factory.inTransaction(session -> update(session, optimizer, publisher, listingId));
+            verifyNoInteractions(publisher);
             factory.inTransaction(session -> assertEquals("AWAITING_ASSETS",
                     session.createNativeQuery("SELECT status FROM listings", String.class).getSingleResult()));
             ready.add(second);
-            factory.inTransaction(session -> update(session, optimizer, events, listingId));
-            factory.inTransaction(session -> update(session, optimizer, events, listingId));
+            when(publisher.dispatchNotificationEvent(any()))
+                    .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("AppSync unavailable")))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            assertThrows(CompletionException.class, () -> factory.inTransaction(session -> update(session, optimizer, publisher, listingId)));
+            factory.inTransaction(session -> {
+                assertEquals("AWAITING_ASSETS", session.createNativeQuery("SELECT status FROM listings", String.class).getSingleResult());
+                assertEquals(0L, session.createQuery("select count(n) from Notification n", Long.class).getSingleResult());
+            });
+            factory.inTransaction(session -> update(session, optimizer, publisher, listingId));
+            factory.inTransaction(session -> update(session, optimizer, publisher, listingId));
             factory.inTransaction(session -> {
                 assertEquals("AVAILABLE", session.createNativeQuery("SELECT status FROM listings", String.class).getSingleResult());
                 var saved = session.createQuery("from Notification", Notification.class).getSingleResult();
@@ -58,11 +68,13 @@ class ListingStatusUpdaterTest {
                 assertEquals(userId, saved.getUserId());
                 assertEquals(Map.of("listingTitle", "My shirt"), saved.getPayload());
             });
-            verify(events).publishEvent(any(NotificationCreated.class));
+            verify(publisher, times(2)).dispatchNotificationEvent(argThat(notification ->
+                    notification.getType() == NotificationType.LISTING_PUBLISHED
+                            && listingId.equals(notification.getListingId())));
         }
     }
 
-    private static void update(org.hibernate.Session session, ImageOptimizer optimizer, ApplicationEventPublisher events, UUID listingId) {
+    private static void update(org.hibernate.Session session, ImageOptimizer optimizer, AppSyncEventsPublisher publisher, UUID listingId) {
         var repository = mock(NotificationRepository.class);
         when(repository.saveAndFlush(any(Notification.class))).thenAnswer(invocation -> {
             Notification notification = invocation.getArgument(0);
@@ -70,7 +82,7 @@ class ListingStatusUpdaterTest {
             session.flush();
             return notification;
         });
-        new ListingStatusUpdater(session, optimizer, new NotificationService(repository, events)).markAvailableWhenReady(listingId);
+        new ListingStatusUpdater(session, optimizer, new NotificationService(repository, publisher)).markAvailableWhenReady(listingId);
     }
 
     private static S3Client s3WithRenditions(UUID listingId, Set<UUID> readyAssets) {

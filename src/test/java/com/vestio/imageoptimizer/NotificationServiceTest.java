@@ -4,7 +4,6 @@ import com.vestio.common.entity.Notification;
 import com.vestio.common.entity.enums.NotificationType;
 import com.vestio.common.publisher.AppSyncEventsPublisher;
 import org.junit.jupiter.api.Test;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +14,6 @@ import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
-import org.springframework.transaction.support.TransactionTemplate;
 import javax.sql.DataSource;
 import java.util.Map;
 import java.util.UUID;
@@ -26,18 +24,14 @@ import static org.mockito.Mockito.*;
 
 class NotificationServiceTest {
     @Test
-    void savesGenericNotificationAndPublishesOnlyAfterCommit() {
+    void savesGenericNotificationAndSendsDirectly() {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var publisher = context.getBean(AppSyncEventsPublisher.class);
             var service = context.getBean(NotificationService.class);
             var payload = new java.util.LinkedHashMap<String, Object>();
             payload.put("message", "Offer received");
             payload.put("metadata", null);
-            var saved = new TransactionTemplate(context.getBean(PlatformTransactionManager.class)).execute(status -> {
-                var notification = service.notifyUser(UUID.randomUUID(), NotificationType.OFFER_CREATED, payload);
-                verifyNoInteractions(publisher);
-                return notification;
-            });
+            var saved = service.notifyUser(UUID.randomUUID(), NotificationType.OFFER_CREATED, payload);
             assertNotNull(saved.getId());
             assertNull(saved.getListingId());
             assertTrue(saved.getPayload().containsKey("metadata"));
@@ -48,29 +42,35 @@ class NotificationServiceTest {
     }
 
     @Test
-    void rollbackDoesNotSendNotification() {
-        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
-            new TransactionTemplate(context.getBean(PlatformTransactionManager.class)).executeWithoutResult(status -> {
-                context.getBean(NotificationService.class).notifyUserListingPublished(UUID.randomUUID(), "Shirt", UUID.randomUUID());
-                status.setRollbackOnly();
-            });
-            verifyNoInteractions(context.getBean(AppSyncEventsPublisher.class));
-            assertEquals(0, context.getBean(NotificationRepository.class).count());
-        }
-    }
-
-    @Test
-    void appSyncFailureKeepsCommittedInboxNotification() {
+    void failedSendRollsBackNotificationSoProcessingCanRetry() {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var publisher = context.getBean(AppSyncEventsPublisher.class);
-            when(publisher.dispatchNotificationEvent(any())).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("AppSync unavailable")));
+            when(publisher.dispatchNotificationEvent(any()))
+                    .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("AppSync unavailable")))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+            var service = context.getBean(NotificationService.class);
+            UUID userId = UUID.randomUUID();
             UUID listingId = UUID.randomUUID();
-            var saved = context.getBean(NotificationService.class).notifyUserListingPublished(UUID.randomUUID(), "Shirt", listingId);
+            assertThrows(java.util.concurrent.CompletionException.class,
+                    () -> service.notifyUserListingPublished(userId, "Shirt", listingId));
+            assertEquals(0, context.getBean(NotificationRepository.class).count());
+            var saved = service.notifyUserListingPublished(userId, "Shirt", listingId);
             var stored = context.getBean(NotificationRepository.class).findById(saved.getId()).orElseThrow();
             assertEquals(listingId, stored.getListingId());
             assertEquals(NotificationType.LISTING_PUBLISHED, stored.getType());
             assertEquals(Map.of("listingTitle", "Shirt"), stored.getPayload());
-            verify(publisher).dispatchNotificationEvent(any());
+            verify(publisher, times(2)).dispatchNotificationEvent(any());
+        }
+    }
+
+    @Test
+    void synchronousSendFailureRollsBackNotification() {
+        try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+            var publisher = context.getBean(AppSyncEventsPublisher.class);
+            when(publisher.dispatchNotificationEvent(any())).thenThrow(new IllegalStateException("AppSync unavailable"));
+            assertThrows(IllegalStateException.class, () -> context.getBean(NotificationService.class)
+                    .notifyUserListingPublished(UUID.randomUUID(), "Shirt", UUID.randomUUID()));
+            assertEquals(0, context.getBean(NotificationRepository.class).count());
         }
     }
 
@@ -97,9 +97,8 @@ class NotificationServiceTest {
             when(publisher.dispatchNotificationEvent(any())).thenReturn(CompletableFuture.completedFuture(null));
             return publisher;
         }
-        @Bean NotificationService notifications(NotificationRepository repository, ApplicationEventPublisher events) {
-            return new NotificationService(repository, events);
+        @Bean NotificationService notifications(NotificationRepository repository, AppSyncEventsPublisher publisher) {
+            return new NotificationService(repository, publisher);
         }
-        @Bean NotificationDispatcher dispatcher(AppSyncEventsPublisher publisher) { return new NotificationDispatcher(publisher); }
     }
 }

@@ -37,15 +37,16 @@ Each non-WebP source is deleted after every rendition for its SQS message has be
 The Lambda uses the listing's asset UUIDs to verify that all WebP renditions exist in S3 before advancing the listing from `AWAITING_ASSETS` to `AVAILABLE`.
 
 That transition saves one `listing-published` notification through this
-application's repository. After commit, its listener uses the shared
-`AppSyncEventsPublisher` and waits for the send to complete before the invocation
-finishes. Duplicate processing messages do not create another publication
+application's repository. `NotificationService` saves and flushes the notification,
+then calls the shared `AppSyncEventsPublisher` directly and waits for the send to
+complete. Lambda has no internal notification event or dispatcher. Duplicate processing messages do not create another publication
 notification for an already available listing. A new image-processing cycle can
 produce a new notification.
 
-There is no notification outbox. Live send failures are logged; the committed
-notification remains in the inbox. SQS still retries processing failures, but
-there is no automatic replay of failed AppSync notifications.
+There is no notification outbox. AppSync send failures propagate and roll back the
+notification and listing status transaction so SQS processing can retry. The live
+send happens before database commit, so a later commit failure may leave a live
+event whose database transaction did not commit.
 
 Deploy backend migration `016-simplify-notifications` before this Lambda.
 The backend sends `listing-created` when a listing is created.
@@ -88,10 +89,10 @@ GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
 ## Shared notification contract
 
-The entity, `NotificationType`, `EventType`, `Event`, `NotificationCreated` and
-publisher come from `vestio-common`. This application keeps its own Spring Data
-notification repository, service and after-commit listener; it does not duplicate
-shared types or the AppSync implementation.
+The entity, `NotificationType`, `EventType`, `Event` and publisher come from
+`vestio-common`. This application keeps its own Spring Data notification
+repository and service. The service sends directly through the shared publisher;
+it does not use application events, dispatchers or duplicate shared types.
 
 A notification contains `userId`, `type`, JSON `payload`, optional `listingId`,
 `id`, `createdAt` and `readAt`. The event envelope contains `id`, `type`, JSON map

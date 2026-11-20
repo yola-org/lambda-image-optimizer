@@ -1,13 +1,12 @@
 package com.vestio.imageoptimizer;
 
-import com.vestio.common.event.NotificationCreated;
+import com.vestio.common.publisher.AppSyncEventsPublisher;
 
 import com.vestio.common.entity.enums.NotificationType;
 
 import com.vestio.common.entity.Notification;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,7 +18,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class NotificationService {
     private final NotificationRepository notificationRepository;
-    private final ApplicationEventPublisher eventPublisher;
+    private final AppSyncEventsPublisher publisher;
 
     @Transactional
     public Notification notifyUser(UUID userId, NotificationType type, Map<String, Object> payload) {
@@ -35,7 +34,7 @@ public class NotificationService {
                 .listingId(listingId)
                 .build();
         Notification saved = notificationRepository.saveAndFlush(notification);
-        eventPublisher.publishEvent(new NotificationCreated(saved));
+        publisher.dispatchNotificationEvent(saved).join();
         return saved;
     }
 
