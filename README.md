@@ -103,8 +103,8 @@ The shared contract fixture verifies the same JSON shape in all three projects.
 ### Shared events library
 
 Notifications, enums, realtime event payloads and the AppSync publisher use
-`com.vestio:vestio-common:0.3.0` from GitHub Packages. Spring repositories and
-transaction listeners remain in this application. Shared JPA entities are included
+`com.vestio:vestio-common:0.4.0` from GitHub Packages. Spring repositories and
+notification services remain in this application. Shared JPA entities are included
 in the application's entity scan.
 
 For local builds, set the following in `~/.gradle/gradle.properties` (never commit credentials):
@@ -118,3 +118,9 @@ Alternatively, set `GITHUB_ACTOR` and `PACKAGES_READ_TOKEN` (or `GITHUB_TOKEN`).
 CI passes `PACKAGES_READ_TOKEN`, falling back to `INFRA_GITHUB_TOKEN`. Configure
 a token with `read:packages` and access to the `yola-org/vestio-common` package.
 The reusable Gradle workflows in `shared-workflows` must include package authentication.
+
+Notification services accept the common `NotificationPayload` interface.
+`ListingNotificationPayload` supplies listing display data, and the interface's
+`toMap(ObjectMapper)` uses the injected Jackson mapper to produce the JSON map.
+No payload class maintains a separate manual field map. Merge and publish common
+`0.4.0` before merging this consumer update.

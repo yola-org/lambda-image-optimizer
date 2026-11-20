@@ -82,7 +82,7 @@ class ListingStatusUpdaterTest {
             session.flush();
             return notification;
         });
-        new ListingStatusUpdater(session, optimizer, new NotificationService(repository, publisher)).markAvailableWhenReady(listingId);
+        new ListingStatusUpdater(session, optimizer, new NotificationService(repository, tools.jackson.databind.json.JsonMapper.builder().build(), publisher)).markAvailableWhenReady(listingId);
     }
 
     private static S3Client s3WithRenditions(UUID listingId, Set<UUID> readyAssets) {

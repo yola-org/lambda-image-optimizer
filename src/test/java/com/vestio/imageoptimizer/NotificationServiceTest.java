@@ -1,6 +1,8 @@
 package com.vestio.imageoptimizer;
 
 import com.vestio.common.entity.Notification;
+import com.vestio.common.event.payload.NotificationPayload;
+import tools.jackson.databind.json.JsonMapper;
 import com.vestio.common.entity.enums.NotificationType;
 import com.vestio.common.publisher.AppSyncEventsPublisher;
 import org.junit.jupiter.api.Test;
@@ -28,9 +30,7 @@ class NotificationServiceTest {
         try (var context = new AnnotationConfigApplicationContext(Config.class)) {
             var publisher = context.getBean(AppSyncEventsPublisher.class);
             var service = context.getBean(NotificationService.class);
-            var payload = new java.util.LinkedHashMap<String, Object>();
-            payload.put("message", "Offer received");
-            payload.put("metadata", null);
+            var payload = new MessagePayload("Offer received", null);
             var saved = service.notifyUser(UUID.randomUUID(), NotificationType.OFFER_CREATED, payload);
             assertNotNull(saved.getId());
             assertNull(saved.getListingId());
@@ -74,6 +74,8 @@ class NotificationServiceTest {
         }
     }
 
+    private record MessagePayload(String message, Object metadata) implements NotificationPayload {}
+
     @Configuration
     @EnableTransactionManagement
     @EnableJpaRepositories(basePackageClasses = NotificationRepository.class)
@@ -98,7 +100,7 @@ class NotificationServiceTest {
             return publisher;
         }
         @Bean NotificationService notifications(NotificationRepository repository, AppSyncEventsPublisher publisher) {
-            return new NotificationService(repository, publisher);
+            return new NotificationService(repository, JsonMapper.builder().build(), publisher);
         }
     }
 }
