@@ -35,7 +35,7 @@ jobs:
     name: Gradle
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
     secrets:
-      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.INFRA_GITHUB_TOKEN }}
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       artifact-name: lambda-jar
       artifact-path: build/libs/
@@ -46,7 +46,7 @@ jobs:
     name: SpotBugs main
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
     secrets:
-      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.INFRA_GITHUB_TOKEN }}
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       task: spotbugsMain
       report-path: build/reports/spotbugs/main.html
@@ -55,7 +55,7 @@ jobs:
     name: SpotBugs test
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
     secrets:
-      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.INFRA_GITHUB_TOKEN }}
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       task: spotbugsTest
       report-path: build/reports/spotbugs/test.html
@@ -64,7 +64,7 @@ jobs:
     name: Spotless
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
     secrets:
-      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.INFRA_GITHUB_TOKEN }}
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       task: spotlessCheck
 
@@ -72,7 +72,7 @@ jobs:
     name: JaCoCo
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
     secrets:
-      PACKAGES_READ_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN || secrets.INFRA_GITHUB_TOKEN }}
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       task: jacocoTestReport
       report-path: build/reports/jacoco/test/
