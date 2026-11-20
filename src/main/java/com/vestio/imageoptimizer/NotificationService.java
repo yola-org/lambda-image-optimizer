@@ -22,11 +22,17 @@ public class NotificationService {
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
-    public Notification notifyUser(UUID userId, NotificationType type, Map<String, Object> params) {
+    public Notification notifyUser(UUID userId, NotificationType type, Map<String, Object> payload) {
+        return notifyUser(userId, type, payload, null);
+    }
+
+    @Transactional
+    public Notification notifyUser(UUID userId, NotificationType type, Map<String, Object> payload, UUID listingId) {
         Notification notification = Notification.builder()
                 .userId(userId)
                 .type(type)
-                .params(params == null ? Map.of() : Map.copyOf(params))
+                .payload(payload == null ? Map.of() : new java.util.LinkedHashMap<>(payload))
+                .listingId(listingId)
                 .build();
         Notification saved = notificationRepository.saveAndFlush(notification);
         eventPublisher.publishEvent(new NotificationCreated(saved));
@@ -34,10 +40,9 @@ public class NotificationService {
     }
 
     @Transactional
-    public Notification notifyUserListingReady(UUID userId, String listingTitle, UUID listingId) {
-        Map<String, Object> params = new HashMap<>();
-        if (listingTitle != null) params.put("listingTitle", listingTitle);
-        if (listingId != null) params.put("listingId", listingId);
-        return notifyUser(userId, NotificationType.LISTING_READY, params);
+    public Notification notifyUserListingPublished(UUID userId, String listingTitle, UUID listingId) {
+        Map<String, Object> payload = new HashMap<>();
+        if (listingTitle != null) payload.put("listingTitle", listingTitle);
+        return notifyUser(userId, NotificationType.LISTING_PUBLISHED, payload, listingId);
     }
 }

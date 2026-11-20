@@ -28,7 +28,7 @@ class ListingStatusUpdater {
         }
         if (listing.assetKeys().stream().allMatch(assetId -> optimizer.ensureListingAssetRenditions(listingId, assetId))) {
             listing.markAvailable();
-            notificationService.notifyUserListingReady(listing.userId(), listing.title(), listingId);
+            notificationService.notifyUserListingPublished(listing.userId(), listing.title(), listingId);
         }
     }
 }

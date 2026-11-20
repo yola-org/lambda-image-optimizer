@@ -36,19 +36,19 @@ Each non-WebP source is deleted after every rendition for its SQS message has be
 
 The Lambda uses the listing's asset UUIDs to verify that all WebP renditions exist in S3 before advancing the listing from `AWAITING_ASSETS` to `AVAILABLE`.
 
-That transition saves one `LISTING_READY` notification and an outbox row in the
-same transaction, using the owner ID and title from the listing. After commit,
-Lambda publishes the stored `notification-event` envelope to
-`/notifications/<userId>` with IAM signing and records delivery. Publication
-failures fail the SQS record, so retries publish the same event UUID without
-creating another notification. A crash after publication may redeliver that same
-UUID; the frontend deduplicates it. Messages exhausted into the DLQ retain their
-pending outbox entries and can be replayed. Replacing images and completing a
-new processing cycle produces a new ready notification.
+That transition saves one `listing-published` notification through this
+application's repository. After commit, its listener uses the shared
+`AppSyncEventsPublisher` and waits for the send to complete before the invocation
+finishes. Duplicate processing messages do not create another publication
+notification for an already available listing. A new image-processing cycle can
+produce a new notification.
 
-Deploy backend migrations `014-create-notification-outbox` and
-`015-optional-notification-listing-id` before this Lambda.
-The backend already sends `LISTING_PENDING` when a listing is created.
+There is no notification outbox. Live send failures are logged; the committed
+notification remains in the inbox. SQS still retries processing failures, but
+there is no automatic replay of failed AppSync notifications.
+
+Deploy backend migration `016-simplify-notifications` before this Lambda.
+The backend sends `listing-created` when a listing is created.
 
 ## Configuration
 
@@ -88,27 +88,21 @@ GitHub Actions CI is configured in `.github/workflows/ci.yml`.
 
 ## Shared notification contract
 
-The notification entity, outbox entity, type enum, event classes, repository and
-AppSync publisher mirror the backend's classes, with package names adjusted for
-this project. `NotificationEvent` extends `BaseEvent`, contains the full
-`Notification`, and emits `eventType: notification-event`. Notification UUIDs are
-also the event UUIDs. Notifications use the same timestamp fields, enum values,
-JSON params, and `readAt` field as the backend; there is no custom map envelope.
+The entity, `NotificationType`, `EventType`, `Event`, `NotificationCreated` and
+publisher come from `vestio-common`. This application keeps its own Spring Data
+notification repository, service and after-commit listener; it does not duplicate
+shared types or the AppSync implementation.
 
-`NotificationService.notifyUser(userId, type, params)` saves generic notifications
-and raises the same internal `NotificationCreated` event as the backend. The
-Lambda dispatcher stores that typed event in the retry outbox. `listingId` is an
-optional outbox correlation, and `NotificationDeliveryService.publishNotification`
-delivers by notification UUID without needing a listing ID. Listing jobs retain
-their existing `publishForListing` retry path.
-
-Both projects include the same `contracts/notification-event.json` fixture and
-round-trip test. Keep these model and event copies synchronized with the backend.
+A notification contains `userId`, `type`, JSON `payload`, optional `listingId`,
+`id`, `createdAt` and `readAt`. The event envelope contains `id`, `type`, JSON map
+`payload` and `occurredAt`. Event type `notification` identifies a saved
+notification payload; the envelope also supports type `chat` for future use.
+The shared contract fixture verifies the same JSON shape in all three projects.
 
 ### Shared events library
 
 Notifications, enums, realtime event payloads and the AppSync publisher use
-`com.vestio:vestio-common:0.2.0` from GitHub Packages. Spring repositories and
+`com.vestio:vestio-common:0.3.0` from GitHub Packages. Spring repositories and
 transaction listeners remain in this application. Shared JPA entities are included
 in the application's entity scan.
 
