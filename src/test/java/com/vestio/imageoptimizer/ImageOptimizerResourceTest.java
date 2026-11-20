@@ -94,7 +94,11 @@ class ImageOptimizerResourceTest {
             return null;
         }).when(statusUpdater).markAvailableWhenReady(listingId);
 
-        new OptimizationService(optimizer(s3), statusUpdater).process(request);
+        NotificationDeliveryService delivery = mock(NotificationDeliveryService.class);
+        new OptimizationService(optimizer(s3), statusUpdater, delivery).process(request);
+        var order = org.mockito.Mockito.inOrder(statusUpdater, delivery);
+        order.verify(statusUpdater).markAvailableWhenReady(listingId);
+        order.verify(delivery).publishForListing(listingId);
 
         assertEquals(List.of(GetObjectRequest.builder().bucket("assets-bucket").key(sourceKey).build()),
                 s3.downloads);

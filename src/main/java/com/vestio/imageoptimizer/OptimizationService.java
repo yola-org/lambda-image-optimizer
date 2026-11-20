@@ -13,10 +13,12 @@ final class OptimizationService {
 
     private final ImageOptimizer optimizer;
     private final ListingStatusUpdater listingStatusUpdater;
+    private final NotificationDeliveryService notificationDelivery;
 
-    OptimizationService(ImageOptimizer optimizer, ListingStatusUpdater listingStatusUpdater) {
+    OptimizationService(ImageOptimizer optimizer, ListingStatusUpdater listingStatusUpdater, NotificationDeliveryService notificationDelivery) {
         this.optimizer = optimizer;
         this.listingStatusUpdater = listingStatusUpdater;
+        this.notificationDelivery = notificationDelivery;
     }
 
     void process(OptimizationRequest request) throws IOException {
@@ -30,5 +32,7 @@ final class OptimizationService {
         }
         optimizer.optimize(request);
         listingStatusUpdater.markAvailableWhenReady(listingId);
+        // Also runs on SQS retries when the listing is already available.
+        notificationDelivery.publishForListing(listingId);
     }
 }
