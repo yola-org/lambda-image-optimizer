@@ -36,14 +36,31 @@ Each non-WebP source is deleted after every rendition for its SQS message has be
 
 The Lambda uses the listing's asset UUIDs to verify that all WebP renditions exist in S3 before advancing the listing from `AWAITING_ASSETS` to `AVAILABLE`.
 
+That transition saves one `listing-published` notification through this
+application's repository. `NotificationService` saves and flushes the notification,
+then calls the shared `AppSyncEventsPublisher` directly and waits for the send to
+complete. Lambda has no internal notification event or dispatcher. Duplicate processing messages do not create another publication
+notification for an already available listing. A new image-processing cycle can
+produce a new notification.
+
+There is no notification outbox. AppSync send failures propagate and roll back the
+notification and listing status transaction so SQS processing can retry. The live
+send happens before database commit, so a later commit failure may leave a live
+event whose database transaction did not commit.
+
+Deploy backend migration `016-simplify-notifications` before this Lambda.
+The backend sends `listing-created` when a listing is created.
+
 ## Configuration
 
 | Variable | Description |
 | --- | --- |
 | `S3_ASSETS_BUCKET` | Bucket for source images and optimized outputs |
+| `APPSYNC_EVENTS_HTTP_ENDPOINT` | HTTPS AppSync Events endpoint ending in `/event` |
+| `APPSYNC_EVENTS_REGION` | AppSync signing region (defaults to `AWS_REGION`, then `ca-central-1`) |
 | `APP_ENV` | `dev` reads `DEV/PRIMARY_JDBC_URL`. `prod` reads `PROD/PRIMARY_JDBC_URL`. |
 
-The Lambda reads the secret when it opens a database connection. The secret can contain a plain PostgreSQL JDBC URL or a JSON property named `PRIMARY_JDBC_URL` or `JDBC_PRIMARY_URL`. The execution role needs `secretsmanager:GetSecretValue` for the secret and `kms:Decrypt` if a customer-managed key protects it. It also needs S3 object read, write and delete permissions, bucket listing permission, and network access to PostgreSQL.
+The Lambda reads the secret when it opens a database connection. The secret can contain a plain PostgreSQL JDBC URL or a JSON property named `PRIMARY_JDBC_URL` or `JDBC_PRIMARY_URL`. The execution role needs `secretsmanager:GetSecretValue` for the secret and `kms:Decrypt` if a customer-managed key protects it. It also needs S3 object read, write and delete permissions, bucket listing permission, network access to PostgreSQL, and `appsync:EventPublish` restricted to the notifications namespace. The infra module supplies the AppSync variables and this policy.
 
 ## Build and run
 
@@ -69,3 +86,35 @@ GitHub Actions CI is configured in `.github/workflows/ci.yml`.
   2. `tag`: Creates and pushes the git release tag.
   3. `infra-bump`: Opens a PR against `yola-org/aws-infra` to bump `image_optimizer_image_tag`.
 
+
+## Shared notification contract
+
+The entity, `NotificationType`, `EventType`, `Event` and publisher come from
+`vestio-common`. This application keeps its own Spring Data notification
+repository and service. The service sends directly through the shared publisher;
+it does not use application events, dispatchers or duplicate shared types.
+
+A notification contains `userId`, `type`, JSON `payload`, optional `listingId`,
+`id`, `createdAt` and `readAt`. The event envelope contains `id`, `type`, JSON map
+`payload` and `occurredAt`. Event type `notification` identifies a saved
+notification payload; the envelope also supports type `chat` for future use.
+The shared contract fixture verifies the same JSON shape in all three projects.
+
+### Shared events library
+
+Notifications, enums, realtime event payloads and the AppSync publisher use
+`com.vestio:vestio-common:0.3.0` from GitHub Packages. Spring repositories and
+transaction listeners remain in this application. Shared JPA entities are included
+in the application's entity scan.
+
+For local builds, set the following in `~/.gradle/gradle.properties` (never commit credentials):
+
+```properties
+gpr.user=YOUR_GITHUB_USERNAME
+gpr.key=YOUR_TOKEN_WITH_READ_PACKAGES
+```
+
+Alternatively, set `GITHUB_ACTOR` and `PACKAGES_READ_TOKEN` (or `GITHUB_TOKEN`).
+CI passes `PACKAGES_READ_TOKEN`, falling back to `INFRA_GITHUB_TOKEN`. Configure
+a token with `read:packages` and access to the `yola-org/vestio-common` package.
+The reusable Gradle workflows in `shared-workflows` must include package authentication.

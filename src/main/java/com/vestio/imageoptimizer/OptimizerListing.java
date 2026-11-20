@@ -22,6 +22,9 @@ class OptimizerListing {
     private UUID id;
 
     private String status;
+    private String title;
+    @Column(name = "user_id")
+    private UUID userId;
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
@@ -34,6 +37,9 @@ class OptimizerListing {
 
     protected OptimizerListing() {
     }
+
+    UUID userId() { return userId; }
+    String title() { return title; }
 
     List<UUID> assetKeys() {
         return assetKeys;

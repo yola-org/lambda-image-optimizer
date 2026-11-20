@@ -93,8 +93,8 @@ class ImageOptimizerResourceTest {
                     s3.events());
             return null;
         }).when(statusUpdater).markAvailableWhenReady(listingId);
-
         new OptimizationService(optimizer(s3), statusUpdater).process(request);
+        verify(statusUpdater).markAvailableWhenReady(listingId);
 
         assertEquals(List.of(GetObjectRequest.builder().bucket("assets-bucket").key(sourceKey).build()),
                 s3.downloads);

@@ -11,10 +11,12 @@ import java.util.UUID;
 class ListingStatusUpdater {
     private final EntityManager entityManager;
     private final ImageOptimizer optimizer;
+    private final NotificationService notificationService;
 
-    ListingStatusUpdater(EntityManager entityManager, ImageOptimizer optimizer) {
+    ListingStatusUpdater(EntityManager entityManager, ImageOptimizer optimizer, NotificationService notificationService) {
         this.entityManager = entityManager;
         this.optimizer = optimizer;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -26,6 +28,7 @@ class ListingStatusUpdater {
         }
         if (listing.assetKeys().stream().allMatch(assetId -> optimizer.ensureListingAssetRenditions(listingId, assetId))) {
             listing.markAvailable();
+            notificationService.notifyUserListingPublished(listing.userId(), listing.title(), listingId);
         }
     }
 }
