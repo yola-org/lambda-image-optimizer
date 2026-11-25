@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
+import java.util.List;
 
 @Service
 class ListingStatusUpdater {
@@ -17,6 +18,22 @@ class ListingStatusUpdater {
         this.entityManager = entityManager;
         this.optimizer = optimizer;
         this.notificationService = notificationService;
+    }
+
+    @Transactional
+    public boolean canProcess(UUID listingId, List<UUID> requestedAssets) {
+        // Wait for the backend transaction that queued these assets to commit.
+        OptimizerListing listing = entityManager.find(OptimizerListing.class, listingId, LockModeType.PESSIMISTIC_WRITE);
+        return listing != null && listing.isAwaitingAssets() && !requestedAssets.isEmpty()
+                && listing.assetKeys().containsAll(requestedAssets);
+    }
+
+    @Transactional
+    public void markRejectedContent(UUID listingId, UUID rejectedAsset) {
+        OptimizerListing listing = entityManager.find(OptimizerListing.class, listingId, LockModeType.PESSIMISTIC_WRITE);
+        if (listing != null && listing.isAwaitingAssets() && listing.assetKeys().contains(rejectedAsset)) {
+            listing.markRejectedContent();
+        }
     }
 
     @Transactional

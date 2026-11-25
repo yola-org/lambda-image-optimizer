@@ -18,13 +18,13 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 class ModerationPipelineTest {
@@ -33,15 +33,19 @@ class ModerationPipelineTest {
         S3Client s3 = s3WithImage();
         RekognitionClient rekognition = rejectingClient();
         ListingStatusUpdater updater = mock(ListingStatusUpdater.class);
+        when(updater.canProcess(any(UUID.class), anyList())).thenReturn(true);
         UUID listing = UUID.randomUUID();
         OptimizationService service = new OptimizationService(optimizer(s3, rekognition), updater);
 
-        assertThrows(IOException.class, () -> service.process(new OptimizationRequest(listing.toString(),
-                List.of("listings/" + listing + "/" + UUID.randomUUID() + ".png"))));
+        UUID asset = UUID.randomUUID();
+        service.process(new OptimizationRequest(listing.toString(),
+                List.of("listings/" + listing + "/" + asset + ".png")));
+        verify(updater).canProcess(listing, List.of(asset));
+        verify(updater).markRejectedContent(listing, asset);
 
         verify(s3).getObjectAsBytes(any(GetObjectRequest.class));
         verifyNoMoreInteractions(s3);
-        verifyNoInteractions(updater);
+        verify(updater, never()).markAvailableWhenReady(any(UUID.class));
     }
 
     @Test
@@ -51,13 +55,14 @@ class ModerationPipelineTest {
         when(rekognition.detectModerationLabels(any(DetectModerationLabelsRequest.class)))
                 .thenThrow(new IllegalStateException("unavailable"));
         ListingStatusUpdater updater = mock(ListingStatusUpdater.class);
+        when(updater.canProcess(any(UUID.class), anyList())).thenReturn(true);
         UUID listing = UUID.randomUUID();
         OptimizationService service = new OptimizationService(optimizer(s3, rekognition), updater);
         assertThrows(IllegalStateException.class, () -> service.process(new OptimizationRequest(listing.toString(),
                 List.of("listings/" + listing + "/" + UUID.randomUUID() + ".webp"))));
         verify(s3).getObjectAsBytes(any(GetObjectRequest.class));
         verifyNoMoreInteractions(s3);
-        verifyNoInteractions(updater);
+        verify(updater, never()).markAvailableWhenReady(any(UUID.class));
     }
 
     @Test
@@ -65,7 +70,7 @@ class ModerationPipelineTest {
         S3Client s3 = s3WithImage();
         when(s3.headObject(any(HeadObjectRequest.class)))
                 .thenReturn(HeadObjectResponse.builder().metadata(Map.of("source-key", "old-source.png")).build());
-        assertThrows(UncheckedIOException.class, () -> optimizer(s3, rejectingClient())
+        assertThrows(ImageRejectedException.class, () -> optimizer(s3, rejectingClient())
                 .ensureListingAssetRenditions(UUID.randomUUID(), UUID.randomUUID()));
     }
 
@@ -84,7 +89,7 @@ class ModerationPipelineTest {
         S3Client s3 = s3WithImage();
         when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
                 .metadata(Map.of("source-key", "old-source.png", ImageModeration.METADATA_KEY, "listing-v1-90.0")).build());
-        assertThrows(UncheckedIOException.class, () -> optimizer(s3, rejectingClient())
+        assertThrows(ImageRejectedException.class, () -> optimizer(s3, rejectingClient())
                 .ensureListingAssetRenditions(UUID.randomUUID(), UUID.randomUUID()));
     }
 
@@ -99,8 +104,34 @@ class ModerationPipelineTest {
             if (request.key().equals(stem + ".webp")) throw NoSuchKeyException.builder().statusCode(404).build();
             return HeadObjectResponse.builder().metadata(Map.of("source-key", "legacy.png")).build();
         });
-        assertThrows(UncheckedIOException.class, () -> optimizer(s3, rejectingClient()).ensureListingAssetRenditions(listing, asset));
+        assertThrows(ImageRejectedException.class, () -> optimizer(s3, rejectingClient()).ensureListingAssetRenditions(listing, asset));
         verify(s3, never()).copyObject(any(CopyObjectRequest.class));
+    }
+
+    @Test
+    void alreadyRejectedAndObsoleteRequestsCompleteWithoutProcessingAgain() throws Exception {
+        ImageOptimizer optimizer = mock(ImageOptimizer.class);
+        ListingStatusUpdater updater = mock(ListingStatusUpdater.class);
+        UUID listingId = UUID.randomUUID();
+        new OptimizationService(optimizer, updater).process(new OptimizationRequest(listingId.toString(),
+                List.of("listings/" + listingId + "/" + UUID.randomUUID() + ".png")));
+        verifyNoInteractions(optimizer);
+        verify(updater, never()).markAvailableWhenReady(any(UUID.class));
+        verify(updater, never()).markRejectedContent(any(UUID.class), any(UUID.class));
+    }
+
+    @Test
+    void failureToPersistRejectionRemainsRetryable() throws Exception {
+        S3Client s3 = s3WithImage();
+        ListingStatusUpdater updater = mock(ListingStatusUpdater.class);
+        when(updater.canProcess(any(UUID.class), anyList())).thenReturn(true);
+        doThrow(new IllegalStateException("database unavailable"))
+                .when(updater).markRejectedContent(any(UUID.class), any(UUID.class));
+        UUID listingId = UUID.randomUUID();
+        assertThrows(IllegalStateException.class, () -> new OptimizationService(optimizer(s3, rejectingClient()), updater)
+                .process(new OptimizationRequest(listingId.toString(),
+                        List.of("listings/" + listingId + "/" + UUID.randomUUID() + ".png"))));
+        verify(updater, never()).markAvailableWhenReady(any(UUID.class));
     }
 
     private static ImageOptimizer optimizer(S3Client s3, RekognitionClient rekognition) {
