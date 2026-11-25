@@ -1,5 +1,9 @@
 package com.vestio.imageoptimizer;
 
+import tools.jackson.databind.json.JsonMapper;
+
+import com.vestio.common.entity.Notification;
+
 import com.vestio.common.publisher.AppSyncEventsPublisher;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,13 +20,14 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import org.springframework.context.ConfigurableApplicationContext;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.rekognition.RekognitionClient;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
 
 import javax.sql.DataSource;
 import java.nio.file.Path;
 
 @SpringBootApplication
-@EntityScan(basePackageClasses = {com.vestio.imageoptimizer.OptimizerListing.class, com.vestio.common.entity.Notification.class})
+@EntityScan(basePackageClasses = {OptimizerListing.class, Notification.class})
 public class ImageOptimizerApplication {
     public static void main(String[] args) {
         start(args).close();
@@ -38,14 +43,14 @@ public class ImageOptimizerApplication {
     AppSyncEventsPublisher appSyncEventsPublisher(
             @Value("${APPSYNC_EVENTS_HTTP_ENDPOINT}") URI endpoint,
             @Value("${APPSYNC_EVENTS_REGION:${AWS_REGION:ca-central-1}}") String region,
-            tools.jackson.databind.ObjectMapper mapper) {
+            JsonMapper mapper) {
         return new AppSyncEventsPublisher(endpoint, region, mapper, DefaultCredentialsProvider.create(),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build());
     }
 
     @Bean
-    tools.jackson.databind.ObjectMapper eventMapper() {
-        return tools.jackson.databind.json.JsonMapper.builder().build();
+    JsonMapper eventMapper() {
+        return JsonMapper.builder().build();
     }
 
     @Bean
@@ -74,8 +79,19 @@ public class ImageOptimizerApplication {
     }
 
     @Bean
-    ImageOptimizer imageOptimizer(S3Client s3, ImageSettings settings) {
-        return new ImageOptimizer(s3, settings);
+    RekognitionClient rekognitionClient() {
+        return RekognitionClient.create();
+    }
+
+    @Bean
+    ImageModeration imageModeration(RekognitionClient rekognition,
+            @Value("${IMAGE_MODERATION_MIN_CONFIDENCE:80}") float minConfidence) {
+        return new ImageModeration(rekognition, minConfidence);
+    }
+
+    @Bean
+    ImageOptimizer imageOptimizer(S3Client s3, ImageSettings settings, ImageModeration moderation) {
+        return new ImageOptimizer(s3, settings, moderation);
     }
 
     @Bean

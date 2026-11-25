@@ -1,5 +1,9 @@
 package com.vestio.imageoptimizer;
 
+import org.hibernate.SessionFactory;
+
+import org.hibernate.Session;
+
 import com.vestio.common.entity.Notification;
 import com.vestio.common.entity.enums.NotificationType;
 import com.vestio.common.publisher.AppSyncEventsPublisher;
@@ -22,6 +26,12 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class ListingStatusUpdaterTest {
+    private static ImageModeration moderation() {
+        ImageModeration moderation = mock(ImageModeration.class);
+        when(moderation.policyId()).thenReturn("listing-v1-80.0");
+        return moderation;
+    }
+
     @Test
     void publishesListingOnlyWhenEveryAssetIsReadyAndDoesNotDuplicateNotification() {
         UUID listingId = UUID.randomUUID();
@@ -29,16 +39,16 @@ class ListingStatusUpdaterTest {
         UUID first = UUID.randomUUID();
         UUID second = UUID.randomUUID();
         Set<UUID> ready = new HashSet<>();
-        var optimizer = new ImageOptimizer(s3WithRenditions(listingId, ready), new ImageSettings("assets", "secret"));
-        var publisher = mock(AppSyncEventsPublisher.class);
+        ImageOptimizer optimizer = new ImageOptimizer(s3WithRenditions(listingId, ready), new ImageSettings("assets", "secret"), moderation());
+        AppSyncEventsPublisher publisher = mock(AppSyncEventsPublisher.class);
         when(publisher.dispatchNotificationEvent(any())).thenReturn(CompletableFuture.completedFuture(null));
-        try (var factory = new Configuration().addAnnotatedClass(OptimizerListing.class).addAnnotatedClass(Notification.class)
+        try (SessionFactory factory = new Configuration().addAnnotatedClass(OptimizerListing.class).addAnnotatedClass(Notification.class)
                 .setProperty("hibernate.connection.url", "jdbc:h2:mem:listing-optimizer;MODE=PostgreSQL")
                 .setProperty("hibernate.hbm2ddl.auto", "create-drop").buildSessionFactory()) {
             factory.inTransaction(session -> {
                 session.createNativeMutationQuery("INSERT INTO listings(id,status,title,user_id) VALUES (:id,'AWAITING_ASSETS','My shirt',:userId)")
                         .setParameter("id", listingId).setParameter("userId", userId).executeUpdate();
-                var assets = List.of(first, second);
+                List<UUID> assets = List.of(first, second);
                 for (int i = 0; i < assets.size(); i++) {
                     session.createNativeMutationQuery("INSERT INTO listing_asset_keys(listing_id,position,asset_key) VALUES (:id,:position,:asset)")
                             .setParameter("id", listingId).setParameter("position", i).setParameter("asset", assets.get(i)).executeUpdate();
@@ -62,7 +72,7 @@ class ListingStatusUpdaterTest {
             factory.inTransaction(session -> update(session, optimizer, publisher, listingId));
             factory.inTransaction(session -> {
                 assertEquals("AVAILABLE", session.createNativeQuery("SELECT status FROM listings", String.class).getSingleResult());
-                var saved = session.createQuery("from Notification", Notification.class).getSingleResult();
+                Notification saved = session.createQuery("from Notification", Notification.class).getSingleResult();
                 assertEquals(NotificationType.LISTING_PUBLISHED, saved.getType());
                 assertEquals(listingId, saved.getListingId());
                 assertEquals(userId, saved.getUserId());
@@ -74,8 +84,8 @@ class ListingStatusUpdaterTest {
         }
     }
 
-    private static void update(org.hibernate.Session session, ImageOptimizer optimizer, AppSyncEventsPublisher publisher, UUID listingId) {
-        var repository = mock(NotificationRepository.class);
+    private static void update(Session session, ImageOptimizer optimizer, AppSyncEventsPublisher publisher, UUID listingId) {
+        NotificationRepository repository = mock(NotificationRepository.class);
         when(repository.saveAndFlush(any(Notification.class))).thenAnswer(invocation -> {
             Notification notification = invocation.getArgument(0);
             session.persist(notification);
@@ -95,7 +105,7 @@ class ListingStatusUpdaterTest {
                     if (readyAssets.stream().noneMatch(asset -> key.startsWith("listings/" + listingId + "/" + asset) && !key.substring(("listings/" + listingId + "/" + asset).length()).contains("/"))) {
                         throw NoSuchKeyException.builder().statusCode(404).build();
                     }
-                    return HeadObjectResponse.builder().metadata(Map.of("source-key", key)).build();
+                    return HeadObjectResponse.builder().metadata(Map.of("source-key", key, ImageModeration.METADATA_KEY, "listing-v1-80.0")).build();
                 });
     }
 }

@@ -22,6 +22,32 @@ listings/<listing-id>/<asset-id>_thumbnail_mobile.webp
 
 Each non-WebP source is deleted after every rendition for its SQS message has been written. A WebP input is replaced in place after its smaller renditions are written. Retries reuse completed outputs. When needed, the Lambda copies older renditions into the current layout.
 
+## Content moderation
+
+Before writing renditions, the Lambda calls Rekognition `DetectModerationLabels`.
+It blocks explicit content, non-explicit nudity, obstructed intimate parts,
+violence (including weapons, blood and gore), visually disturbing content, and
+drugs/tobacco at or above `IMAGE_MODERATION_MIN_CONFIDENCE` (default **80**).
+Swimwear and kissing alone do not trigger rejection. The policy uses AWS's
+[current moderation taxonomy](https://docs.aws.amazon.com/rekognition/latest/dg/moderation-api.html).
+
+Images are converted in memory to JPEG for analysis, including WebP inputs;
+the analysis copy is limited to 2560px on its longest edge (with an 80px minimum
+per dimension) and 5MB. No analysis copy is uploaded to S3.
+Approved renditions carry a `moderation-policy` metadata value containing the
+policy version and confidence threshold. Existing or legacy renditions without
+a matching value are checked before reuse or listing publication.
+
+Flagged images and Rekognition errors fail the SQS record, keep the listing
+unpublished, and follow the queue's retry/dead-letter policy. Sources are retained
+when processing fails. No rejection status or user notification is created.
+Previously published listings are not scanned retroactively. This gate controls
+listing publication; it does not change access to uploaded S3 source objects.
+
+The execution role requires `rekognition:DetectModerationLabels` with resource
+`*` (the operation has no resource-level IAM scope). Deploy the infra permission
+before running the updated Lambda. Moderation is always enabled.
+
 ## SQS message contract
 
 ```json
@@ -55,6 +81,7 @@ The backend sends `listing-created` when a listing is created.
 
 | Variable | Description |
 | --- | --- |
+| `IMAGE_MODERATION_MIN_CONFIDENCE` | Minimum confidence from 0 to 100 for blocking labels; defaults to 80 |
 | `S3_ASSETS_BUCKET` | Bucket for source images and optimized outputs |
 | `APPSYNC_EVENTS_HTTP_ENDPOINT` | HTTPS AppSync Events endpoint ending in `/event` |
 | `APPSYNC_EVENTS_REGION` | AppSync signing region (defaults to `AWS_REGION`, then `ca-central-1`) |

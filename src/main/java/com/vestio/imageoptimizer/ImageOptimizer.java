@@ -24,6 +24,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -42,10 +43,12 @@ final class ImageOptimizer {
             new Rendition("original", "", 2560, 0.90f));
     private final S3Client s3;
     private final ImageSettings settings;
+    private final ImageModeration moderation;
 
-    ImageOptimizer(S3Client s3, ImageSettings settings) {
+    ImageOptimizer(S3Client s3, ImageSettings settings, ImageModeration moderation) {
         this.s3 = s3;
         this.settings = settings;
+        this.moderation = moderation;
     }
 
     void optimize(OptimizationRequest request) throws IOException {
@@ -74,12 +77,15 @@ final class ImageOptimizer {
             if (source == null) throw new IOException("Unsupported or corrupt image: " + sourceKey);
             if ((long) source.getWidth() * source.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + sourceKey);
 
+            moderation.check(source);
+
             // Write the full-size image last. For WebP inputs it replaces the source.
             for (Rendition rendition : RENDITIONS) {
                 s3.putObject(PutObjectRequest.builder().bucket(bucket)
                                 .key(rendition.key(stem))
                                 .contentType("image/webp").cacheControl("public, max-age=31536000, immutable")
-                                .metadata(Map.of("listing-id", request.listingId(), "source-key", sourceKey)).build(),
+                                .metadata(Map.of("listing-id", request.listingId(), "source-key", sourceKey,
+                                        ImageModeration.METADATA_KEY, moderation.policyId())).build(),
                         RequestBody.fromBytes(webp(resize(source, rendition.longestEdge()), rendition.quality())));
             }
             if (!sourceKey.equals(optimizedKey)) {
@@ -102,6 +108,7 @@ final class ImageOptimizer {
         if (original != null && isOptimized(original.metadata())
                 && RENDITIONS.stream().filter(rendition -> !rendition.suffix().isEmpty())
                         .allMatch(rendition -> head(rendition.key(stem)) != null)) {
+            checkExisting(stem + ".webp", original);
             return true;
         }
 
@@ -120,6 +127,8 @@ final class ImageOptimizer {
         if (!RENDITIONS.stream().allMatch(rendition -> head(sourceKey.apply(rendition)) != null)) {
             return false;
         }
+        String originalKey = sourceKey.apply(RENDITIONS.getLast());
+        checkExisting(originalKey, head(originalKey));
         String bucket = settings.bucketName();
         for (Rendition rendition : RENDITIONS) {
             s3.copyObject(CopyObjectRequest.builder()
@@ -128,6 +137,22 @@ final class ImageOptimizer {
                     .build());
         }
         return true;
+    }
+
+    private void checkExisting(String key, HeadObjectResponse object) {
+        if (object != null && moderation.policyId().equals(object.metadata().get(ImageModeration.METADATA_KEY))) {
+            return;
+        }
+        try {
+            byte[] bytes = s3.getObjectAsBytes(GetObjectRequest.builder()
+                    .bucket(settings.bucketName()).key(key).build()).asByteArray();
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) throw new IOException("Unsupported or corrupt image: " + key);
+            if ((long) image.getWidth() * image.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + key);
+            moderation.check(image);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
     }
 
     private HeadObjectResponse head(String key) {

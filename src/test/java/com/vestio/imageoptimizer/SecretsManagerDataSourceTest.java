@@ -1,5 +1,7 @@
 package com.vestio.imageoptimizer;
 
+import org.mockito.MockedStatic;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,7 +36,7 @@ class SecretsManagerDataSourceTest {
                 secrets, ImageSettings.jdbcSecretName(environment), new ObjectMapper());
         Connection connection = mock(Connection.class);
 
-        try (var driverManager = mockStatic(DriverManager.class)) {
+        try (MockedStatic<DriverManager> driverManager = mockStatic(DriverManager.class)) {
             driverManager.when(() -> DriverManager.getConnection(JDBC_URL)).thenReturn(connection);
 
             assertSame(connection, dataSource.getConnection());
@@ -57,7 +59,7 @@ class SecretsManagerDataSourceTest {
         GetSecretValueRequest request = stubSecret(secrets, secretName, "{\"PRIMARY_JDBC_URL\":\"invalid\"}");
         SecretsManagerDataSource dataSource = new SecretsManagerDataSource(secrets, secretName, new ObjectMapper());
 
-        try (var driverManager = mockStatic(DriverManager.class)) {
+        try (MockedStatic<DriverManager> driverManager = mockStatic(DriverManager.class)) {
             assertThrows(IllegalStateException.class, dataSource::getConnection);
 
             verify(secrets).getSecretValue(request);

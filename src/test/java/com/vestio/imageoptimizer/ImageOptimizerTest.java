@@ -1,5 +1,9 @@
 package com.vestio.imageoptimizer;
 
+import static org.mockito.Mockito.when;
+
+import static org.mockito.Mockito.mock;
+
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -19,6 +23,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageOptimizerTest {
+    private static ImageModeration moderation() {
+        ImageModeration moderation = mock(ImageModeration.class);
+        when(moderation.policyId()).thenReturn("listing-v1-80.0");
+        return moderation;
+    }
+
     @Test
     void createsThreeWebpFilesThenDeletesTheSource() throws Exception {
         List<PutObjectRequest> uploads = new ArrayList<>();
@@ -30,7 +40,7 @@ class ImageOptimizerTest {
             if (method.getName().equals("serviceName")) return "S3";
             throw new UnsupportedOperationException(method.getName());
         });
-        ImageOptimizer optimizer = new ImageOptimizer(s3, new ImageSettings("source", "secret-arn"));
+        ImageOptimizer optimizer = new ImageOptimizer(s3, new ImageSettings("source", "secret-arn"), moderation());
 
         optimizer.optimize(new OptimizationRequest("listing-1", List.of("uploads/kitchen.jpg")));
 

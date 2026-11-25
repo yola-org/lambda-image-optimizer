@@ -1,5 +1,7 @@
 package com.vestio.imageoptimizer;
 
+import static org.mockito.Mockito.when;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -41,6 +43,12 @@ import static org.mockito.Mockito.verify;
 
 /** Exercises the optimization pipeline with the real image bundled in the test resources. */
 class ImageOptimizerResourceTest {
+    private static ImageModeration moderation() {
+        ImageModeration moderation = mock(ImageModeration.class);
+        when(moderation.policyId()).thenReturn("listing-v1-80.0");
+        return moderation;
+    }
+
     private static final String RESOURCE = "/img.png";
     private static final String SOURCE_KEY = "uploads/photo.png";
     private static final String ORIGINAL_KEY = "uploads/photo.webp";
@@ -161,7 +169,7 @@ class ImageOptimizerResourceTest {
             assertEquals("assets-bucket", request.bucket());
             assertEquals("image/webp", request.contentType());
             assertEquals("public, max-age=31536000, immutable", request.cacheControl());
-            assertEquals(Map.of("listing-id", "listing-1", "source-key", SOURCE_KEY), request.metadata());
+            assertEquals(Map.of("listing-id", "listing-1", "source-key", SOURCE_KEY, ImageModeration.METADATA_KEY, "listing-v1-80.0"), request.metadata());
         }
     }
 
@@ -208,7 +216,7 @@ class ImageOptimizerResourceTest {
     }
 
     private static ImageOptimizer optimizer(RecordingS3 s3) {
-        return new ImageOptimizer(s3.client(), new ImageSettings("assets-bucket", "secret-arn"));
+        return new ImageOptimizer(s3.client(), new ImageSettings("assets-bucket", "secret-arn"), moderation());
     }
 
     private static void assertDimensions(RecordingS3 s3, String key, int width, int height) throws IOException {
