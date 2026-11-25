@@ -38,9 +38,13 @@ Approved renditions carry a `moderation-policy` metadata value containing the
 policy version and confidence threshold. Existing or legacy renditions without
 a matching value are checked before reuse or listing publication.
 
-Flagged images and Rekognition errors fail the SQS record, keep the listing
-unpublished, and follow the queue's retry/dead-letter policy. Sources are retained
-when processing fails. No rejection status or user notification is created.
+Confirmed violations change the listing to the shared `ListingStatus.REJECTED_CONTENT`
+status and complete the SQS record after the database commit. Duplicate messages
+for a refused listing are skipped. Removed assets cannot reject the current
+listing; uploading replacement assets starts a new `AWAITING_ASSETS` cycle.
+Rekognition, image processing, and database failures still fail the SQS record
+and follow the queue's retry/dead-letter policy. Refusal sends no publication
+notification. Sources are retained on refusal.
 Previously published listings are not scanned retroactively. This gate controls
 listing publication; it does not change access to uploaded S3 source objects.
 
@@ -60,7 +64,10 @@ before running the updated Lambda. Moderation is always enabled.
 
 `keys` is also accepted in place of `assetKeys`. Enable `ReportBatchItemFailures` on the event source mapping so SQS can retry failed records individually.
 
-The Lambda uses the listing's asset UUIDs to verify that all WebP renditions exist in S3 before advancing the listing from `AWAITING_ASSETS` to `AVAILABLE`.
+The Lambda uses the shared common listing status enum and the listing's asset UUIDs
+to verify that all WebP renditions exist and pass moderation before advancing the
+listing from `AWAITING_ASSETS` to `AVAILABLE`. Confirmed violations instead set
+`REJECTED_CONTENT`.
 
 That transition saves one `listing-published` notification through this
 application's repository. `NotificationService` saves and flushes the notification,
@@ -88,6 +95,15 @@ The backend sends `listing-created` when a listing is created.
 | `APP_ENV` | `dev` reads `DEV/PRIMARY_JDBC_URL`. `prod` reads `PROD/PRIMARY_JDBC_URL`. |
 
 The Lambda reads the secret when it opens a database connection. The secret can contain a plain PostgreSQL JDBC URL or a JSON property named `PRIMARY_JDBC_URL` or `JDBC_PRIMARY_URL`. The execution role needs `secretsmanager:GetSecretValue` for the secret and `kms:Decrypt` if a customer-managed key protects it. It also needs S3 object read, write and delete permissions, bucket listing permission, network access to PostgreSQL, and `appsync:EventPublish` restricted to the notifications namespace. The infra module supplies the AppSync variables and this policy.
+
+## Shared status release order
+
+The latest published common release checked for this change was `0.8.0`.
+This feature requires `vestio-common:0.9.0`, which adds `REJECTED_CONTENT`.
+Merge and publish common first, then deploy the backend before enabling this
+Lambda's new status writes. The frontend recognizes the new status and renders
+refused listings on the Pending page and profile Pending tab with a badge and placeholder.
+The backend status column is already a string; no database migration is required.
 
 ## Build and run
 
@@ -130,7 +146,7 @@ The shared contract fixture verifies the same JSON shape in all three projects.
 ### Shared events library
 
 Notifications, enums, realtime event payloads and the AppSync publisher use
-`com.vestio:vestio-common:0.3.0` from GitHub Packages. Spring repositories and
+`com.vestio:vestio-common:0.9.0` from GitHub Packages. Spring repositories and
 transaction listeners remain in this application. Shared JPA entities are included
 in the application's entity scan.
 

@@ -1,6 +1,8 @@
 package com.vestio.imageoptimizer;
 
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyList;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -96,6 +98,7 @@ class ImageOptimizerResourceTest {
                 """.formatted(UUID.randomUUID(), listingId, sourceKey), OptimizationRequest.class);
         RecordingS3 s3 = new RecordingS3(png());
         ListingStatusUpdater statusUpdater = mock(ListingStatusUpdater.class);
+        when(statusUpdater.canProcess(eq(listingId), anyList())).thenReturn(true);
         doAnswer(invocation -> {
             assertEquals(List.of("put:" + thumbnail, "put:" + mobile, "put:" + original, "delete:" + sourceKey),
                     s3.events());

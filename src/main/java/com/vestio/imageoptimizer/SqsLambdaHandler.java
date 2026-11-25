@@ -34,7 +34,7 @@ public final class SqsLambdaHandler implements RequestHandler<SQSEvent, SQSBatch
                 OptimizationRequest request = Application.MAPPER.readValue(message.getBody(), OptimizationRequest.class);
                 listingId = request.listingId();
                 Application.SERVICE.process(request);
-                LOGGER.info("Optimized listing " + listingId + " from SQS message " + messageId);
+                LOGGER.info("Processed listing " + listingId + " from SQS message " + messageId);
             } catch (Exception exception) {
                 // Log the full stack trace once at the message boundary; the message is retried via ReportBatchItemFailures.
                 LOGGER.log(Level.SEVERE, "Image optimization failed for listing " + listingId

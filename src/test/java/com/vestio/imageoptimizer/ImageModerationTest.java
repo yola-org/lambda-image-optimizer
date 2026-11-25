@@ -14,7 +14,6 @@ import software.amazon.awssdk.services.rekognition.model.RekognitionException;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -26,14 +25,14 @@ class ImageModerationTest {
             "Blood & Gore", "Drugs & Tobacco", "Drugs", "Visually Disturbing"})
     void rejectsProhibitedCategoriesAtThreshold(String category) {
         RekognitionClient client = client(ModerationLabel.builder().name(category).confidence(80f).build());
-        assertThrows(IOException.class, () -> new ImageModeration(client, 80).check(image()));
+        assertThrows(ImageRejectedException.class, () -> new ImageModeration(client, 80).check(image()));
     }
 
     @Test
     void rejectsChildLabelsUsingTheirParent() {
         RekognitionClient client = client(ModerationLabel.builder().name("Physical Violence")
                 .parentName("Graphic Violence").confidence(95f).build());
-        assertThrows(IOException.class, () -> new ImageModeration(client, 80).check(image()));
+        assertThrows(ImageRejectedException.class, () -> new ImageModeration(client, 80).check(image()));
     }
 
     @Test

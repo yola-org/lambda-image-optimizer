@@ -77,7 +77,7 @@ final class ImageOptimizer {
             if (source == null) throw new IOException("Unsupported or corrupt image: " + sourceKey);
             if ((long) source.getWidth() * source.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + sourceKey);
 
-            moderation.check(source);
+            checkModeration(source, sourceKey);
 
             // Write the full-size image last. For WebP inputs it replaces the source.
             for (Rendition rendition : RENDITIONS) {
@@ -128,7 +128,11 @@ final class ImageOptimizer {
             return false;
         }
         String originalKey = sourceKey.apply(RENDITIONS.getLast());
-        checkExisting(originalKey, head(originalKey));
+        try {
+            checkExisting(originalKey, head(originalKey));
+        } catch (ImageRejectedException exception) {
+            throw new ImageRejectedException(exception.getMessage(), stem + ".webp");
+        }
         String bucket = settings.bucketName();
         for (Rendition rendition : RENDITIONS) {
             s3.copyObject(CopyObjectRequest.builder()
@@ -137,6 +141,14 @@ final class ImageOptimizer {
                     .build());
         }
         return true;
+    }
+
+    private void checkModeration(BufferedImage image, String key) throws IOException {
+        try {
+            moderation.check(image);
+        } catch (ImageRejectedException exception) {
+            throw new ImageRejectedException(exception.getMessage(), key);
+        }
     }
 
     private void checkExisting(String key, HeadObjectResponse object) {
@@ -149,7 +161,7 @@ final class ImageOptimizer {
             BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
             if (image == null) throw new IOException("Unsupported or corrupt image: " + key);
             if ((long) image.getWidth() * image.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + key);
-            moderation.check(image);
+            checkModeration(image, key);
         } catch (IOException exception) {
             throw new UncheckedIOException(exception);
         }

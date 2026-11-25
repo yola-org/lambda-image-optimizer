@@ -51,7 +51,7 @@ final class ImageModeration {
                         || (label.parentName() != null && BLOCKED.contains(label.parentName())))
                 .map(label -> label.name() + " (" + label.confidence() + "%)").toList();
         if (!blocked.isEmpty()) {
-            throw new IOException("Image rejected by content moderation: " + String.join(", ", blocked));
+            throw new ImageRejectedException("Image rejected by content moderation: " + String.join(", ", blocked));
         }
     }
 

@@ -6,7 +6,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.UUID;
 import java.util.Optional;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
@@ -22,10 +22,10 @@ public interface NotificationRepository extends JpaRepository<Notification, UUID
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Notification n set n.readAt = :readAt where n.id = :id and n.userId = :userId and n.readAt is null")
-    int markRead(@Param("id") UUID id, @Param("userId") UUID userId, @Param("readAt") LocalDateTime readAt);
+    int markRead(@Param("id") UUID id, @Param("userId") UUID userId, @Param("readAt") Instant readAt);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Notification n set n.readAt = :readAt where n.userId = :userId and n.readAt is null and n.createdAt <= :readAt")
-    int markAllRead(@Param("userId") UUID userId, @Param("readAt") LocalDateTime readAt);
+    int markAllRead(@Param("userId") UUID userId, @Param("readAt") Instant readAt);
 
 }
