@@ -1,0 +1,16 @@
+{
+  "id": "7e5560a7-9008-48b5-bb39-bfe64198e536",
+  "type": "notification",
+  "occurredAt": "2026-11-20T12:00:00Z",
+  "payload": {
+    "id": "7e5560a7-9008-48b5-bb39-bfe64198e536",
+    "userId": "b2ab6e97-6c4c-47dc-87ed-2017fe8caf09",
+    "type": "offer-created",
+    "payload": {
+      "offerId": "d4384a88-87aa-421a-99fe-3c5896076ada"
+    },
+    "listingId": null,
+    "readAt": null,
+    "createdAt": "2026-11-20T12:00:00Z"
+  }
+}

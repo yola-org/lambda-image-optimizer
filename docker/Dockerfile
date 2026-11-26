@@ -9,10 +9,10 @@ ENV APP_VERSION=${APP_VERSION}
 ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED"
 
 # ------------------------------------------------------------
-# Copy the Gradle Shadow JAR
+# Copy the application and runtime dependency JARs
 # ------------------------------------------------------------
 
-COPY build/libs/*-all.jar ${LAMBDA_TASK_ROOT}/lib/
+COPY build/libs/*.jar ${LAMBDA_TASK_ROOT}/lib/
 
 # ------------------------------------------------------------
 # Lambda handler

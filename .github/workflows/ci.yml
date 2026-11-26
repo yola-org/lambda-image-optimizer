@@ -1,9 +1,7 @@
 # Image optimizer Lambda pipeline.
 #
-# Shared logic lives in yola-org/shared-workflows. Verification jobs (version,
-# changes, Gradle test & package) run concurrently. Release jobs only run on
-# main after a pull request is merged, and only when application or Docker
-# build inputs have changed.
+# Shared logic lives in yola-org/shared-workflows. Verification jobs run
+# concurrently. Release jobs run on pushes to main.
 
 name: CI
 
@@ -15,6 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  packages: read # download shared events library
   contents: write # push release tags
   pull-requests: read # check merged PR for release gate
 
@@ -32,18 +31,51 @@ jobs:
       tag: false
       commit-message: ${{ github.event.pull_request.title || '' }}
 
-  changes:
-    name: Detect application changes
-    uses: yola-org/shared-workflows/.github/workflows/reusable-changed-paths.yml@main
-    with:
-      patterns: '(^|/)(src/|docker/|build\.gradle|build\.gradle\.kts|settings\.gradle|settings\.gradle\.kts|gradle\.properties|gradlew|gradlew\.bat|gradle/|buildSrc/|Dockerfile|\.dockerignore)'
-
   gradle:
     name: Gradle
     uses: yola-org/shared-workflows/.github/workflows/reusable-gradle.yml@main
+    secrets:
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
     with:
       artifact-name: lambda-jar
       artifact-path: build/libs/
+      test-command: ./gradlew test -x jacocoTestReport
+      build-command: ./gradlew stageLambda
+
+  spotbugs-main:
+    name: SpotBugs main
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    secrets:
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
+    with:
+      task: spotbugsMain
+      report-path: build/reports/spotbugs/main.html
+
+  spotbugs-test:
+    name: SpotBugs test
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    secrets:
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
+    with:
+      task: spotbugsTest
+      report-path: build/reports/spotbugs/test.html
+
+  spotless:
+    name: Spotless
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    secrets:
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
+    with:
+      task: spotlessCheck
+
+  jacoco:
+    name: JaCoCo
+    uses: yola-org/shared-workflows/.github/workflows/reusable-gradle-check.yml@main
+    secrets:
+      PACKAGES_READ_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
+    with:
+      task: jacocoTestReport
+      report-path: build/reports/jacoco/test/
 
   release-gate:
     name: Check release gate
@@ -54,22 +86,26 @@ jobs:
     uses: yola-org/shared-workflows/.github/workflows/reusable-release-gate.yml@main
     with:
       base-branch: main
-      require-merged-pr: true
+      require-merged-pr: false
 
   docker:
     name: Build and push image
-    needs: [release-gate, changes, version, gradle]
+    needs: [release-gate, version, gradle, spotbugs-main, spotbugs-test, spotless, jacoco]
     if: >-
       always() &&
       needs.release-gate.result == 'success' &&
       needs.release-gate.outputs.release == 'true' &&
-      needs.changes.result == 'success' &&
-      needs.changes.outputs.changed == 'true' &&
       needs.version.result == 'success' &&
-      needs.gradle.result == 'success'
+      needs.gradle.result == 'success' &&
+      needs.spotbugs-main.result == 'success' &&
+      needs.spotbugs-test.result == 'success' &&
+      needs.spotless.result == 'success' &&
+      needs.jacoco.result == 'success'
     uses: yola-org/shared-workflows/.github/workflows/reusable-docker-ecr.yml@main
     with:
       image-name: vestio/image-optimizer
+      platforms: linux/amd64
+      provenance: 'false'
       version: ${{ needs.version.outputs.version }}
       ecr-registry: ${{ vars.ECR_REGISTRY }}
       aws-region: ${{ vars.AWS_REGION }}

@@ -1,11 +1,19 @@
 package com.vestio.imageoptimizer;
 
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyList;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -23,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -30,14 +39,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /** Exercises the optimization pipeline with the real image bundled in the test resources. */
 class ImageOptimizerResourceTest {
+    private static ImageModeration moderation() {
+        ImageModeration moderation = mock(ImageModeration.class);
+        when(moderation.policyId()).thenReturn("listing-v1-80.0");
+        return moderation;
+    }
+
     private static final String RESOURCE = "/img.png";
     private static final String SOURCE_KEY = "uploads/photo.png";
-    private static final String ORIGINAL_KEY = "listings/listing-1/uploads/photo/original.webp";
-    private static final String THUMBNAIL_KEY = "listings/listing-1/uploads/photo/thumbnail.webp";
-    private static final String MOBILE_KEY = "listings/listing-1/uploads/photo/thumbnail-mobile.webp";
+    private static final String ORIGINAL_KEY = "uploads/photo.webp";
+    private static final String THUMBNAIL_KEY = "uploads/photo_thumbnail.webp";
+    private static final String MOBILE_KEY = "uploads/photo_thumbnail_mobile.webp";
     private static final Path OUTPUT_DIRECTORY = Path.of("build", "test-optimized-output");
 
     @BeforeAll
@@ -59,11 +77,56 @@ class ImageOptimizerResourceTest {
         RecordingS3 s3 = new RecordingS3(png());
         optimizer(s3).optimize(new OptimizationRequest("listing-1", List.of(SOURCE_KEY)));
 
-        assertEquals(List.of(ORIGINAL_KEY, THUMBNAIL_KEY, MOBILE_KEY),
+        assertEquals(List.of(THUMBNAIL_KEY, MOBILE_KEY, ORIGINAL_KEY),
                 s3.uploads().stream().map(Upload::key).toList());
         assertEquals(List.of(SOURCE_KEY), s3.deletedKeys());
-        assertEquals(List.of("put:" + ORIGINAL_KEY, "put:" + THUMBNAIL_KEY, "put:" + MOBILE_KEY, "delete:" + SOURCE_KEY),
+        assertEquals(List.of("put:" + THUMBNAIL_KEY, "put:" + MOBILE_KEY, "put:" + ORIGINAL_KEY, "delete:" + SOURCE_KEY),
                 s3.events());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void processesTheBackendEventAndPersistsAfterWritingAllExpectedWebpKeys(boolean legacySource) throws Exception {
+        UUID listingId = UUID.randomUUID();
+        String stem = "listings/" + listingId + "/" + UUID.randomUUID();
+        String sourceKey = stem + (legacySource ? "/original.png" : ".png");
+        String original = stem + ".webp";
+        String thumbnail = stem + "_thumbnail.webp";
+        String mobile = stem + "_thumbnail_mobile.webp";
+        OptimizationRequest request = new ObjectMapper().readValue("""
+                {"userId":"%s","listingId":"%s","assetKeys":["%s"]}
+                """.formatted(UUID.randomUUID(), listingId, sourceKey), OptimizationRequest.class);
+        RecordingS3 s3 = new RecordingS3(png());
+        ListingStatusUpdater statusUpdater = mock(ListingStatusUpdater.class);
+        when(statusUpdater.canProcess(eq(listingId), anyList())).thenReturn(true);
+        doAnswer(invocation -> {
+            assertEquals(List.of("put:" + thumbnail, "put:" + mobile, "put:" + original, "delete:" + sourceKey),
+                    s3.events());
+            return null;
+        }).when(statusUpdater).markAvailableWhenReady(listingId);
+        new OptimizationService(optimizer(s3), statusUpdater).process(request);
+        verify(statusUpdater).markAvailableWhenReady(listingId);
+
+        assertEquals(List.of(GetObjectRequest.builder().bucket("assets-bucket").key(sourceKey).build()),
+                s3.downloads);
+        assertEquals(List.of(thumbnail, mobile, original), s3.uploads().stream().map(Upload::key).toList());
+        for (Upload upload : s3.uploads()) {
+            assertEquals("image/webp", upload.request().contentType());
+            assertNotNull(decode(upload.bytes()), upload.key());
+        }
+        verify(statusUpdater).markAvailableWhenReady(listingId);
+    }
+
+    @Test
+    void replacesWebpSourceWithoutDeletingTheOptimizedOriginal() throws Exception {
+        RecordingS3 generated = new RecordingS3(png());
+        optimizer(generated).optimize(new OptimizationRequest("listing-1", List.of(SOURCE_KEY)));
+        RecordingS3 source = new RecordingS3(generated.upload(ORIGINAL_KEY).bytes());
+
+        optimizer(source).optimize(new OptimizationRequest("listing-1", List.of(ORIGINAL_KEY)));
+
+        assertEquals(List.of("put:" + THUMBNAIL_KEY, "put:" + MOBILE_KEY, "put:" + ORIGINAL_KEY), source.events());
+        assertTrue(source.deletedKeys().isEmpty());
     }
 
     @Test
@@ -109,7 +172,7 @@ class ImageOptimizerResourceTest {
             assertEquals("assets-bucket", request.bucket());
             assertEquals("image/webp", request.contentType());
             assertEquals("public, max-age=31536000, immutable", request.cacheControl());
-            assertEquals(Map.of("listing-id", "listing-1", "source-key", SOURCE_KEY), request.metadata());
+            assertEquals(Map.of("listing-id", "listing-1", "source-key", SOURCE_KEY, ImageModeration.METADATA_KEY, "listing-v1-80.0"), request.metadata());
         }
     }
 
@@ -134,7 +197,7 @@ class ImageOptimizerResourceTest {
     @Test
     void keepsEverySourceWhenAnUploadFailsMidBatch() throws Exception {
         RecordingS3 s3 = new RecordingS3(png());
-        s3.failUploadsContaining("listings/listing-1/uploads/second/");
+        s3.failUploadsContaining("uploads/second");
 
         S3Exception failure = assertThrows(S3Exception.class, () -> optimizer(s3).optimize(
                 new OptimizationRequest("listing-1", List.of("uploads/first.png", "uploads/second.png"))));
@@ -156,7 +219,7 @@ class ImageOptimizerResourceTest {
     }
 
     private static ImageOptimizer optimizer(RecordingS3 s3) {
-        return new ImageOptimizer(s3.client(), new ImageSettings("assets-bucket", "jdbc:postgresql://localhost/test"));
+        return new ImageOptimizer(s3.client(), new ImageSettings("assets-bucket", "secret-arn"), moderation());
     }
 
     private static void assertDimensions(RecordingS3 s3, String key, int width, int height) throws IOException {
@@ -172,7 +235,7 @@ class ImageOptimizerResourceTest {
     }
 
     private static int longestEdge(String key) {
-        if (key.endsWith("thumbnail-mobile.webp")) return 480;
+        if (key.endsWith("thumbnail_mobile.webp")) return 480;
         if (key.endsWith("thumbnail.webp")) return 960;
         return 2560;
     }
@@ -196,6 +259,7 @@ class ImageOptimizerResourceTest {
     /** Minimal in-memory S3 double that records uploads, downloads and deletions in order. */
     private static final class RecordingS3 {
         private final byte[] source;
+        private final List<GetObjectRequest> downloads = new ArrayList<>();
         private final List<Upload> uploads = new ArrayList<>();
         private final List<String> deletedKeys = new ArrayList<>();
         private final List<String> events = new ArrayList<>();
@@ -212,8 +276,10 @@ class ImageOptimizerResourceTest {
         S3Client client() {
             return (S3Client) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{S3Client.class},
                     (proxy, method, args) -> switch (method.getName()) {
-                        case "getObjectAsBytes" -> ResponseBytes.fromByteArray(
-                                GetObjectResponse.builder().build(), source);
+                        case "getObjectAsBytes" -> {
+                            downloads.add((GetObjectRequest) args[0]);
+                            yield ResponseBytes.fromByteArray(GetObjectResponse.builder().build(), source);
+                        }
                         case "putObject" -> {
                             PutObjectRequest request = (PutObjectRequest) args[0];
                             if (failUploadsContaining != null && request.key().contains(failUploadsContaining)) {

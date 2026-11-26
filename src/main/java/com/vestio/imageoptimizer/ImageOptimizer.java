@@ -3,12 +3,14 @@ package com.vestio.imageoptimizer;
 import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -22,9 +24,13 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.logging.Logger;
 
 /** Downloads source assets, creates WebP renditions, then removes each source only after successful writes. */
@@ -32,61 +38,148 @@ final class ImageOptimizer {
     private static final Logger LOGGER = Logger.getLogger(ImageOptimizer.class.getName());
     private static final long MAX_PIXELS = 100_000_000L;
     private static final List<Rendition> RENDITIONS = List.of(
-            new Rendition("original", 2560, 0.90f),
-            new Rendition("thumbnail", 960, 0.84f),
-            new Rendition("thumbnail-mobile", 480, 0.82f));
+            new Rendition("thumbnail", "_thumbnail", 960, 0.84f),
+            new Rendition("thumbnail-mobile", "_thumbnail_mobile", 480, 0.82f),
+            new Rendition("original", "", 2560, 0.90f));
     private final S3Client s3;
     private final ImageSettings settings;
+    private final ImageModeration moderation;
 
-    ImageOptimizer(S3Client s3, ImageSettings settings) {
+    ImageOptimizer(S3Client s3, ImageSettings settings, ImageModeration moderation) {
         this.s3 = s3;
         this.settings = settings;
+        this.moderation = moderation;
     }
 
     void optimize(OptimizationRequest request) throws IOException {
-        String sourceBucket = settings.bucketName();
-        LOGGER.fine("Optimizing " + request.assetKeys().size() + " asset(s) for listing "
-                + request.listingId() + " from bucket " + sourceBucket);
-        List<String> sourcesToDelete = new java.util.ArrayList<>();
+        String bucket = settings.bucketName();
+        List<String> sourcesToDelete = new ArrayList<>();
         for (String sourceKey : request.assetKeys()) {
             validateSourceKey(sourceKey);
-            String destinationBase = destinationBase(request.listingId(), sourceKey);
-            LOGGER.fine("Processing " + sourceKey + " -> " + destinationBase);
+            String stem = sourceKey.replaceFirst("\\.[^./]+$", "");
+            if (stem.startsWith("listings/" + request.listingId() + "/") && stem.endsWith("/original")) {
+                stem = stem.substring(0, stem.length() - "/original".length());
+            }
+            String optimizedKey = stem + ".webp";
             ResponseBytes<GetObjectResponse> downloaded;
             try {
-                downloaded = s3.getObjectAsBytes(GetObjectRequest.builder().bucket(sourceBucket).key(sourceKey).build());
-            } catch (NoSuchKeyException missing) {
-                // A prior Lambda attempt may have already uploaded and deleted this source.
-                LOGGER.info("Source " + sourceKey + " is missing; checking for output from a prior attempt");
-                s3.headObject(HeadObjectRequest.builder().bucket(settings.bucketName()).key(destinationBase + "/original.webp").build());
+                downloaded = s3.getObjectAsBytes(GetObjectRequest.builder().bucket(bucket).key(sourceKey).build());
+            } catch (S3Exception missing) {
+                if (missing.statusCode() != 404 || !ensureRenditions(request.listingId(), stem)) {
+                    throw missing;
+                }
+                continue;
+            }
+            if (isOptimized(downloaded.response().metadata()) && ensureRenditions(request.listingId(), stem)) {
                 continue;
             }
             BufferedImage source = ImageIO.read(new ByteArrayInputStream(downloaded.asByteArray()));
             if (source == null) throw new IOException("Unsupported or corrupt image: " + sourceKey);
             if ((long) source.getWidth() * source.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + sourceKey);
 
+            checkModeration(source, sourceKey);
+
+            // Write the full-size image last. For WebP inputs it replaces the source.
             for (Rendition rendition : RENDITIONS) {
-                byte[] webp = webp(resize(source, rendition.longestEdge()), rendition.quality());
-                s3.putObject(PutObjectRequest.builder().bucket(settings.bucketName())
-                                .key(destinationBase + "/" + rendition.name() + ".webp")
+                s3.putObject(PutObjectRequest.builder().bucket(bucket)
+                                .key(rendition.key(stem))
                                 .contentType("image/webp").cacheControl("public, max-age=31536000, immutable")
-                                .metadata(Map.of("listing-id", request.listingId(), "source-key", sourceKey)).build(),
-                        RequestBody.fromBytes(webp));
+                                .metadata(Map.of("listing-id", request.listingId(), "source-key", sourceKey,
+                                        ImageModeration.METADATA_KEY, moderation.policyId())).build(),
+                        RequestBody.fromBytes(webp(resize(source, rendition.longestEdge()), rendition.quality())));
             }
-            LOGGER.fine("Uploaded " + RENDITIONS.size() + " renditions for " + sourceKey);
-            sourcesToDelete.add(sourceKey);
+            if (!sourceKey.equals(optimizedKey)) {
+                sourcesToDelete.add(sourceKey);
+            }
         }
         // Delete no source until all assets in this SQS message have every rendition uploaded.
         for (String sourceKey : sourcesToDelete) {
-            s3.deleteObject(DeleteObjectRequest.builder().bucket(sourceBucket).key(sourceKey).build());
+            s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(sourceKey).build());
             LOGGER.fine("Deleted source " + sourceKey);
         }
-        LOGGER.fine("Finished optimizing listing " + request.listingId());
     }
 
-    private String destinationBase(String listingId, String sourceKey) {
-        String withoutExtension = sourceKey.replaceFirst("\\.[^.]+$", "");
-        return "listings/" + listingId + "/" + withoutExtension;
+    boolean ensureListingAssetRenditions(UUID listingId, UUID assetId) {
+        return ensureRenditions(listingId.toString(), "listings/" + listingId + "/" + assetId);
+    }
+
+    private boolean ensureRenditions(String listingId, String stem) {
+        HeadObjectResponse original = head(stem + ".webp");
+        if (original != null && isOptimized(original.metadata())
+                && RENDITIONS.stream().filter(rendition -> !rendition.suffix().isEmpty())
+                        .allMatch(rendition -> head(rendition.key(stem)) != null)) {
+            checkExisting(stem + ".webp", original);
+            return true;
+        }
+
+        String legacyStem = stem + "/original";
+        HeadObjectResponse legacyOriginal = head(legacyStem + ".webp");
+        if (legacyOriginal != null && isOptimized(legacyOriginal.metadata())
+                && copyRenditions(stem, rendition -> rendition.nestedKey(legacyStem))) {
+            return true;
+        }
+
+        String legacyDirectory = "listings/" + listingId + "/" + legacyStem;
+        return copyRenditions(stem, rendition -> legacyDirectory + "/" + rendition.name() + ".webp");
+    }
+
+    private boolean copyRenditions(String stem, Function<Rendition, String> sourceKey) {
+        if (!RENDITIONS.stream().allMatch(rendition -> head(sourceKey.apply(rendition)) != null)) {
+            return false;
+        }
+        String originalKey = sourceKey.apply(RENDITIONS.getLast());
+        try {
+            checkExisting(originalKey, head(originalKey));
+        } catch (ImageRejectedException exception) {
+            throw new ImageRejectedException(exception.getMessage(), stem + ".webp");
+        }
+        String bucket = settings.bucketName();
+        for (Rendition rendition : RENDITIONS) {
+            s3.copyObject(CopyObjectRequest.builder()
+                    .sourceBucket(bucket).sourceKey(sourceKey.apply(rendition))
+                    .destinationBucket(bucket).destinationKey(rendition.key(stem))
+                    .build());
+        }
+        return true;
+    }
+
+    private void checkModeration(BufferedImage image, String key) throws IOException {
+        try {
+            moderation.check(image);
+        } catch (ImageRejectedException exception) {
+            throw new ImageRejectedException(exception.getMessage(), key);
+        }
+    }
+
+    private void checkExisting(String key, HeadObjectResponse object) {
+        if (object != null && moderation.policyId().equals(object.metadata().get(ImageModeration.METADATA_KEY))) {
+            return;
+        }
+        try {
+            byte[] bytes = s3.getObjectAsBytes(GetObjectRequest.builder()
+                    .bucket(settings.bucketName()).key(key).build()).asByteArray();
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) throw new IOException("Unsupported or corrupt image: " + key);
+            if ((long) image.getWidth() * image.getHeight() > MAX_PIXELS) throw new IOException("Image exceeds 100 megapixels: " + key);
+            checkModeration(image, key);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+    }
+
+    private HeadObjectResponse head(String key) {
+        try {
+            return s3.headObject(HeadObjectRequest.builder().bucket(settings.bucketName()).key(key).build());
+        } catch (S3Exception exception) {
+            if (exception.statusCode() == 404) {
+                return null;
+            }
+            throw exception;
+        }
+    }
+
+    private boolean isOptimized(Map<String, String> metadata) {
+        return metadata.containsKey("source-key");
     }
 
     private static void validateSourceKey(String key) {
@@ -128,5 +221,13 @@ final class ImageOptimizer {
         // The writer buffers into the ImageOutputStream, so it must be closed (flushed) before reading the bytes.
         return bytes.toByteArray();
     }
-    private record Rendition(String name, int longestEdge, float quality) { }
+    private record Rendition(String name, String suffix, int longestEdge, float quality) {
+        String key(String stem) {
+            return stem + suffix + ".webp";
+        }
+
+        String nestedKey(String stem) {
+            return stem + suffix.replace('_', '-') + ".webp";
+        }
+    }
 }
