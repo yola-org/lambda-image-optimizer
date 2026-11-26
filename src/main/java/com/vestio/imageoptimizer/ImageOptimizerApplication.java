@@ -19,6 +19,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import org.springframework.context.ConfigurableApplicationContext;
+import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.rekognition.RekognitionClient;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
@@ -80,7 +81,8 @@ public class ImageOptimizerApplication {
 
     @Bean
     RekognitionClient rekognitionClient() {
-        return RekognitionClient.create();
+        // Canada Central does not support DetectModerationLabels.
+        return RekognitionClient.builder().region(Region.US_EAST_1).build();
     }
 
     @Bean

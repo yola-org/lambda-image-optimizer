@@ -25,6 +25,9 @@ Each non-WebP source is deleted after every rendition for its SQS message has be
 ## Content moderation
 
 Before writing renditions, the Lambda calls Rekognition `DetectModerationLabels`.
+The Rekognition client uses `us-east-1` because this operation is unavailable in
+`ca-central-1`; moderation image bytes are sent to the US for analysis. Other AWS
+clients continue to use the environment's configured region.
 It blocks explicit content, non-explicit nudity, obstructed intimate parts,
 violence (including weapons, blood and gore), visually disturbing content, and
 drugs/tobacco at or above `IMAGE_MODERATION_MIN_CONFIDENCE` (default **80**).
