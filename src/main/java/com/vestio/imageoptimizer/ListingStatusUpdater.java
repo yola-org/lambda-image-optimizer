@@ -33,6 +33,7 @@ class ListingStatusUpdater {
         OptimizerListing listing = entityManager.find(OptimizerListing.class, listingId, LockModeType.PESSIMISTIC_WRITE);
         if (listing != null && listing.isAwaitingAssets() && listing.assetKeys().contains(rejectedAsset)) {
             listing.markRejectedContent();
+            notificationService.notifyUserListingRefused(listing.userId(), listing.title(), listingId);
         }
     }
 

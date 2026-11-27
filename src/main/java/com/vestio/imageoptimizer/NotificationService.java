@@ -45,4 +45,10 @@ public class NotificationService {
         return notifyUser(userId, NotificationType.LISTING_PUBLISHED,
                 new ListingNotificationPayload(listingTitle), listingId);
     }
+
+    @Transactional
+    public Notification notifyUserListingRefused(UUID userId, String listingTitle, UUID listingId) {
+        return notifyUser(userId, NotificationType.LISTING_REFUSED,
+                new ListingNotificationPayload(listingTitle), listingId);
+    }
 }

@@ -43,7 +43,12 @@ a matching value are checked before reuse or listing publication.
 
 Confirmed violations change the listing to the shared `ListingStatus.REJECTED_CONTENT`
 status and complete the SQS record after the database commit. Duplicate messages
-for a refused listing are skipped. Removed assets cannot reject the current
+do not send another notification. The owner receives a `listing-refused`
+notification through AppSync with `listingId` and `payload.listingTitle`.
+If AppSync publication fails, the rejection and saved notification roll back
+so SQS can retry. Deploy the backend with `vestio-common` 0.10.0 (which adds
+`LISTING_REFUSED`) before deploying this Lambda.
+Messages for a refused listing are skipped. Removed assets cannot reject the current
 listing; uploading replacement assets starts a new `AWAITING_ASSETS` cycle.
 Rekognition, image processing, and database failures still fail the SQS record
 and follow the queue's retry/dead-letter policy. Refusal sends no publication
